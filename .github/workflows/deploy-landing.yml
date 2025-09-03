@@ -1,0 +1,159 @@
+name: Deploy Landing (multi-domínio) — arquivar + build + publicar
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domínio'
+        type: choice
+        options: [pinacle.com.br, gestordecapitais.com]
+        required: true
+      slug:
+        description: 'Slug (ex: vendaimovel)'
+        required: true
+      kind:
+        description: 'Tipo de fonte'
+        type: choice
+        options: [flutter_git, vite_git, zip_url]
+        required: true
+      repo:
+        description: 'owner/name do projeto (para *_git)'
+        required: false
+      ref:
+        description: 'branch/tag (para *_git)'
+        default: 'main'
+        required: false
+      subdir:
+        description: 'Subpasta no repo (para *_git)'
+        default: ''
+        required: false
+      zip_url:
+        description: 'URL pública do ZIP (para zip_url; precisa ter index.html na raiz)'
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deploy-landing
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      ARCHIVE_ROOT: catalog
+    steps:
+      - name: Checkout (repo ops)
+        uses: actions/checkout@v4
+
+      - name: Validar & checar servidor
+        run: |
+          [[ "${{ github.event.inputs.slug }}" =~ ^[a-z0-9-]{1,64}$ ]] || { echo "Slug inválido. Use [a-z0-9-]"; exit 1; }
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p "${{ secrets.SSH_PORT || 22 }}" -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+          ssh -i ~/.ssh/id_rsa -p "${{ secrets.SSH_PORT || 22 }}" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "[ -d /var/www/pages/${{ github.event.inputs.domain }} ] || { echo 'Domínio não preparado no servidor'; exit 1; }"
+
+      # ===== Fontes GIT =====
+      - name: Checkout fonte (GIT)
+        if: ${{ startsWith(github.event.inputs.kind, 'flutter_') || startsWith(github.event.inputs.kind, 'vite_') }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.inputs.repo || github.repository }}
+          ref: ${{ github.event.inputs.ref }}
+          path: _src
+
+      - name: Definir paths
+        if: ${{ startsWith(github.event.inputs.kind, 'flutter_') || startsWith(github.event.inputs.kind, 'vite_') }}
+        run: |
+          echo "SUBDIR=${{ github.event.inputs.subdir || '.' }}" >> $GITHUB_ENV
+          echo "PATH_SRC=_src/${{ github.event.inputs.subdir || '.' }}" >> $GITHUB_ENV
+
+      # ===== Fonte ZIP =====
+      - name: Baixar ZIP
+        if: ${{ github.event.inputs.kind == 'zip_url' }}
+        run: |
+          curl -L "${{ github.event.inputs.zip_url }}" -o site.zip
+          unzip -o site.zip -d _zip
+          test -f _zip/index.html || { echo "ZIP precisa conter index.html na raiz"; exit 1; }
+          echo "DIST=_zip" >> $GITHUB_ENV
+
+      # ===== Arquivar a fonte no repo ops =====
+      - name: Arquivar fonte (zip)
+        run: |
+          TS=$(date +%Y%m%d-%H%M%S)
+          DEST="$ARCHIVE_ROOT/${{ github.event.inputs.domain }}/${{ github.event.inputs.slug }}"
+          mkdir -p "$DEST"
+          if [[ "${{ github.event.inputs.kind }}" == "zip_url" ]]; then
+            cp site.zip "$DEST/source-$TS.zip"
+            SRCINFO="zip_url=${{ github.event.inputs.zip_url }}"
+          else
+            (cd "$PATH_SRC" && zip -qr "$GITHUB_WORKSPACE/$DEST/source-$TS.zip" .)
+            SRCINFO="repo=${{ github.event.inputs.repo || github.repository }}, ref=${{ github.event.inputs.ref }}, subdir=${{ github.event.inputs.subdir || '.' }}"
+          fi
+          cat > "$DEST/meta.json" <<META
+          { "domain": "${{ github.event.inputs.domain }}",
+            "slug":   "${{ github.event.inputs.slug }}",
+            "kind":   "${{ github.event.inputs.kind }}",
+            "source": "${SRCINFO}",
+            "run_id": "${{ github.run_id }}",
+            "commit": "${{ github.sha }}",
+            "archived_at": "$TS" }
+          META
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$DEST"
+          git commit -m "archive: ${{ github.event.inputs.domain }}/p/${{ github.event.inputs.slug }} [skip ci]" || true
+          git push || true
+
+      # ===== Builds =====
+      - name: Setup Flutter
+        if: ${{ github.event.inputs.kind == 'flutter_git' }}
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Build Flutter Web
+        if: ${{ github.event.inputs.kind == 'flutter_git' }}
+        working-directory: ${{ env.PATH_SRC }}
+        run: |
+          flutter clean
+          flutter config --enable-web
+          flutter build web --release --web-renderer=canvaskit \
+            --base-href /p/${{ github.event.inputs.slug }}/
+          echo "DIST=${{ env.PATH_SRC }}/build/web" >> $GITHUB_ENV
+
+      - name: Setup Node
+        if: ${{ github.event.inputs.kind == 'vite_git' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build Vite/React
+        if: ${{ github.event.inputs.kind == 'vite_git' }}
+        working-directory: ${{ env.PATH_SRC }}
+        env:
+          BASE_PATH: /p/${{ github.event.inputs.slug }}/
+        run: |
+          npm ci
+          npm run build
+          echo "DIST=${{ env.PATH_SRC }}/dist" >> $GITHUB_ENV
+
+      # ===== Deploy =====
+      - name: Rsync pro servidor
+        run: |
+          rsync -avzr --delete \
+            -e "ssh -i ~/.ssh/id_rsa -p ${{ secrets.SSH_PORT || 22 }}" \
+            "$DIST"/ \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/var/www/pages/${{ github.event.inputs.domain }}/${{ github.event.inputs.slug }}/
+
+      - name: Gravar version.txt no destino
+        run: |
+          ssh -i ~/.ssh/id_rsa -p "${{ secrets.SSH_PORT || 22 }}" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "printf 'domain=%s\nslug=%s\nkind=%s\ncommit=%s\nrun_id=%s\ndate=%s\n' \
+             '${{ github.event.inputs.domain }}' '${{ github.event.inputs.slug }}' '${{ github.event.inputs.kind }}' \
+             '${{ github.sha }}' '${{ github.run_id }}' \"\$(date -u +'%F %T UTC')\" \
+             > /var/www/pages/${{ github.event.inputs.domain }}/${{ github.event.inputs.slug }}/version.txt"
