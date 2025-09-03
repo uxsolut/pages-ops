@@ -2,6 +2,6 @@
   "slug":   "vendaimovel",
   "kind":   "flutter_git",
   "source": "repo=uxsolut/gestao_de_capitais_front, ref=main, subdir=.",
-  "run_id": "17445043161",
-  "commit": "266fc67cb5acc4f09ef3dfaface448e5165ff280",
-  "archived_at": "20250903-201716" }
+  "run_id": "17445346247",
+  "commit": "8c27d0305ce1d71cf7183345d016147666739cb4",
+  "archived_at": "20250903-203046" }
