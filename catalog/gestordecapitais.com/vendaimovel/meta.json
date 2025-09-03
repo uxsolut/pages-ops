@@ -1,0 +1,7 @@
+{ "domain": "gestordecapitais.com",
+  "slug":   "vendaimovel",
+  "kind":   "flutter_git",
+  "source": "repo=uxsolut/gestao_de_capitais_front, ref=main, subdir=.",
+  "run_id": "17445043161",
+  "commit": "266fc67cb5acc4f09ef3dfaface448e5165ff280",
+  "archived_at": "20250903-201716" }
