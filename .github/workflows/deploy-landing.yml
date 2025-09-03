@@ -43,6 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       ARCHIVE_ROOT: catalog
+
     steps:
       - name: Checkout (repo ops)
         uses: actions/checkout@v4
@@ -66,11 +67,19 @@ jobs:
           ref: ${{ github.event.inputs.ref }}
           path: _src
 
-      - name: Definir paths
+      - name: Definir paths (com fallback)
         if: ${{ startsWith(github.event.inputs.kind, 'flutter_') || startsWith(github.event.inputs.kind, 'vite_') }}
         run: |
-          echo "SUBDIR=${{ github.event.inputs.subdir || '.' }}" >> $GITHUB_ENV
-          echo "PATH_SRC=_src/${{ github.event.inputs.subdir || '.' }}" >> $GITHUB_ENV
+          REQ="${{ github.event.inputs.subdir || '.' }}"
+          CAND="_src/$REQ"
+          if [ ! -d "$CAND" ]; then
+            echo "SUBDIR=." >> $GITHUB_ENV
+            echo "PATH_SRC=_src" >> $GITHUB_ENV
+            echo "Aviso: subdir '$REQ' não encontrado; usando raiz do repo."
+          else
+            echo "SUBDIR=$REQ" >> $GITHUB_ENV
+            echo "PATH_SRC=$CAND" >> $GITHUB_ENV
+          fi
 
       # ===== Fonte ZIP =====
       - name: Baixar ZIP
@@ -120,11 +129,19 @@ jobs:
         if: ${{ github.event.inputs.kind == 'flutter_git' }}
         working-directory: ${{ env.PATH_SRC }}
         run: |
+          set -e
           flutter clean
           flutter config --enable-web
-          flutter build web --release --web-renderer=canvaskit \
-            --base-href /p/${{ github.event.inputs.slug }}/
-          echo "DIST=${{ env.PATH_SRC }}/build/web" >> $GITHUB_ENV
+          if flutter build web -h | grep -q -- '--web-renderer'; then
+            echo "Usando --web-renderer canvaskit"
+            flutter build web --release --web-renderer canvaskit \
+              --base-href /p/${{ github.event.inputs.slug }}/
+          else
+            echo "Flag --web-renderer indisponível; seguindo sem ela."
+            flutter build web --release \
+              --base-href /p/${{ github.event.inputs.slug }}/
+          fi
+          echo "DIST=${PWD}/build/web" >> $GITHUB_ENV
 
       - name: Setup Node
         if: ${{ github.event.inputs.kind == 'vite_git' }}
