@@ -14,8 +14,7 @@ on:
       kind:
         description: 'Tipo de fonte'
         type: choice
-        # Mantenho vite_git só para compat; os passos abaixo ignoram vite.
-        options: [zip_repo, zip_url, flutter_git, vite_git]
+        options: [zip_repo, zip_url, flutter_git]   # só Flutter
         required: true
       # para *_git
       repo:
@@ -31,7 +30,7 @@ on:
         required: false
       # para zip_url
       zip_url:
-        description: 'URL pública do ZIP (para zip_url; conter projeto Flutter)'
+        description: 'URL pública do ZIP (para zip_url; projeto Flutter na raiz com pubspec.yaml)'
         required: false
       # para zip_repo
       zip_path:
@@ -65,7 +64,7 @@ jobs:
           ssh -i ~/.ssh/id_rsa -p "${{ secrets.SSH_PORT || 22 }}" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
             "[ -d /var/www/pages/${{ github.event.inputs.domain }} ] || { echo 'Domínio não preparado no servidor'; exit 1; }"
 
-      # ===== Fontes GIT =====
+      # ===== Fontes GIT (Flutter) =====
       - name: Checkout fonte (GIT)
         if: ${{ startsWith(github.event.inputs.kind, 'flutter_') }}
         uses: actions/checkout@v4
@@ -88,13 +87,12 @@ jobs:
             echo "PATH_SRC=$CAND" >> $GITHUB_ENV
           fi
 
-      # ===== Fonte ZIP (URL) =====
+      # ===== Fonte ZIP =====
       - name: Obter ZIP (zip_url)
         if: ${{ github.event.inputs.kind == 'zip_url' }}
         run: |
           curl -L "${{ github.event.inputs.zip_url }}" -o site.zip
 
-      # ===== Fonte ZIP (repo) =====
       - name: Obter ZIP (zip_repo)
         if: ${{ github.event.inputs.kind == 'zip_repo' }}
         run: |
@@ -106,7 +104,6 @@ jobs:
           [ -f "$ZIP" ] || { echo "Arquivo não encontrado: $ZIP"; exit 1; }
           cp "$ZIP" site.zip
 
-      # ===== Preparar fonte ZIP como Flutter Web (sempre) =====
       - name: Descompactar ZIP para _src (Flutter)
         if: ${{ github.event.inputs.kind == 'zip_repo' || github.event.inputs.kind == 'zip_url' }}
         run: |
