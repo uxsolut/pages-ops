@@ -14,8 +14,9 @@ on:
       kind:
         description: 'Tipo de fonte'
         type: choice
-        options: [flutter_git, vite_git, zip_url]
+        options: [zip_repo, zip_url, flutter_git, vite_git]
         required: true
+      # para *_git
       repo:
         description: 'owner/name do projeto (para *_git)'
         required: false
@@ -27,8 +28,13 @@ on:
         description: 'Subpasta no repo (para *_git)'
         default: ''
         required: false
+      # para zip_url
       zip_url:
         description: 'URL pública do ZIP (para zip_url; precisa ter index.html na raiz)'
+        required: false
+      # para zip_repo
+      zip_path:
+        description: 'Caminho do ZIP dentro deste repo (para zip_repo), ex: uploads/meu-site.zip'
         required: false
 
 permissions:
@@ -81,24 +87,45 @@ jobs:
             echo "PATH_SRC=$CAND" >> $GITHUB_ENV
           fi
 
-      # ===== Fonte ZIP =====
-      - name: Baixar ZIP
+      # ===== Fonte ZIP (URL) =====
+      - name: Obter ZIP (zip_url)
         if: ${{ github.event.inputs.kind == 'zip_url' }}
         run: |
           curl -L "${{ github.event.inputs.zip_url }}" -o site.zip
+
+      # ===== Fonte ZIP (repo) =====
+      - name: Obter ZIP (zip_repo)
+        if: ${{ github.event.inputs.kind == 'zip_repo' }}
+        run: |
+          ZIP="${{ github.event.inputs.zip_path }}"
+          [ -n "$ZIP" ] || { echo "zip_path obrigatório para zip_repo"; exit 1; }
+          case "$ZIP" in
+            /*|*..*) echo "zip_path inválido (não usar / absoluto ou ..)"; exit 1;;
+          esac
+          [ -f "$ZIP" ] || { echo "Arquivo não encontrado: $ZIP"; exit 1; }
+          cp "$ZIP" site.zip
+
+      # ===== Preparar DIST a partir do ZIP =====
+      - name: Descompactar ZIP e validar index
+        if: ${{ startsWith(github.event.inputs.kind, 'zip_') }}
+        run: |
           unzip -o site.zip -d _zip
           test -f _zip/index.html || { echo "ZIP precisa conter index.html na raiz"; exit 1; }
           echo "DIST=_zip" >> $GITHUB_ENV
 
       # ===== Arquivar a fonte no repo ops =====
-      - name: Arquivar fonte (zip)
+      - name: Arquivar fonte (zip ou git)
         run: |
           TS=$(date +%Y%m%d-%H%M%S)
           DEST="$ARCHIVE_ROOT/${{ github.event.inputs.domain }}/${{ github.event.inputs.slug }}"
           mkdir -p "$DEST"
-          if [[ "${{ github.event.inputs.kind }}" == "zip_url" ]]; then
+          if [[ "${{ github.event.inputs.kind }}" == zip_url || "${{ github.event.inputs.kind }}" == zip_repo ]]; then
             cp site.zip "$DEST/source-$TS.zip"
-            SRCINFO="zip_url=${{ github.event.inputs.zip_url }}"
+            if [[ "${{ github.event.inputs.kind }}" == zip_url ]]; then
+              SRCINFO="zip_url=${{ github.event.inputs.zip_url }}"
+            else
+              SRCINFO="zip_repo=${{ github.event.inputs.zip_path }}"
+            fi
           else
             (cd "$PATH_SRC" && zip -qr "$GITHUB_WORKSPACE/$DEST/source-$TS.zip" .)
             SRCINFO="repo=${{ github.event.inputs.repo || github.repository }}, ref=${{ github.event.inputs.ref }}, subdir=${{ github.event.inputs.subdir || '.' }}"
