@@ -1,0 +1,7 @@
+{ "domain": "gestordecapitais.com",
+  "slug":   "testetestetesteteste",
+  "kind":   "zip_repo",
+  "source": "zip_repo=uploads/gestordecapitais.com/testetestetesteteste-80d08a50.zip",
+  "run_id": "17503826792",
+  "commit": "92b9a9b7701e32184eb3fc571a7f2304f166e12c",
+  "archived_at": "20250905-203135" }
