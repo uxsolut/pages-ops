@@ -1,0 +1,7 @@
+{ "domain": "gestordecapitais.com",
+  "slug":   "treste",
+  "kind":   "zip_repo",
+  "source": "zip_repo=uploads/gestordecapitais.com/treste-9944603a.zip",
+  "run_id": "17504314898",
+  "commit": "ce29f4acb2c9b5725a329fc2fb87779bb59c878a",
+  "archived_at": "20250905-205859" }
