@@ -1,18 +1,18 @@
-name: Deploy Landing (Flutter ZIP) — build + publicar
+name: Deploy Landing (Flutter ZIP) — build + publish
 
 on:
   workflow_dispatch:
     inputs:
       domain:
-        description: "Domínio"
+        description: 'Domínio'
         type: choice
         options: [pinacle.com.br, gestordecapitais.com]
         required: true
       slug:
-        description: "Slug (ex: vendaimovel)"
+        description: 'Slug (a-z0-9-)'
         required: true
       zip_url:
-        description: "URL pública do ZIP com os fontes Flutter (precisa ter pubspec.yaml na raiz)"
+        description: 'URL pública do ZIP do Flutter (com pubspec.yaml na raiz)'
         required: true
 
 permissions:
@@ -25,76 +25,72 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    env:
-      PATH_SRC: _src            # onde vamos descompactar os fontes
+
     steps:
       - name: Checkout (repo ops)
         uses: actions/checkout@v4
 
       - name: Validar slug e preparar SSH
         run: |
-          [[ "${{ github.event.inputs.slug }}" =~ ^[a-z0-9-]{1,64}$ ]] || { echo "Slug inválido. Use [a-z0-9-]"; exit 1; }
-          sudo apt-get update -y
-          sudo apt-get install -y unzip rsync
+          [[ "${{ github.event.inputs.slug }}" =~ ^[a-z0-9-]{1,64}$ ]] || { echo "Slug inválido. Use [a-z0-9-]{1,64}"; exit 1; }
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -p "${{ secrets.SSH_PORT || 22 }}" -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
-          # checar pasta do domínio no servidor
           ssh -i ~/.ssh/id_rsa -p "${{ secrets.SSH_PORT || 22 }}" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
             "[ -d /var/www/pages/${{ github.event.inputs.domain }} ] || { echo 'Domínio não preparado no servidor'; exit 1; }"
 
-      - name: Baixar ZIP com fontes Flutter
+      - name: Baixar ZIP do Flutter
         run: |
-          curl -L "${{ github.event.inputs.zip_url }}" -o site.zip
-          unzip -o site.zip -d "${{ env.PATH_SRC }}"
-          test -f "${{ env.PATH_SRC }}/pubspec.yaml" || { echo "pubspec.yaml não encontrado na raiz do ZIP"; exit 1; }
+          curl -fL "${{ github.event.inputs.zip_url }}" -o site.zip
+
+      - name: Conferir estrutura do ZIP
+        run: |
+          unzip -q site.zip -d _src
+          test -f _src/pubspec.yaml || { echo "ZIP deve conter pubspec.yaml na raiz"; exit 1; }
+          ls -la _src
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
 
-      - name: Cache do pub
+      - name: Cache do .pub-cache (opcional)
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.pub-cache
-          key: ${{ runner.os }}-pub-${{ hashFiles(format('{0}/pubspec.lock', env.PATH_SRC), format('{0}/pubspec.yaml', env.PATH_SRC)) }}
+          path: ~/.pub-cache
+          key: flutter-pubcache-${{ runner.os }}-${{ hashFiles('_src/pubspec.lock', '_src/pubspec.yaml') }}
           restore-keys: |
-            ${{ runner.os }}-pub-
+            flutter-pubcache-${{ runner.os }}-
 
       - name: Flutter pub get
-        working-directory: ${{ env.PATH_SRC }}
+        working-directory: _src
         run: flutter pub get
 
-      - name: Build Flutter Web
-        working-directory: ${{ env.PATH_SRC }}
+      - name: Build Flutter Web (com base-href)
+        working-directory: _src
         run: |
-          set -e
           flutter clean
           flutter config --enable-web
           if flutter build web -h | grep -q -- '--web-renderer'; then
-            echo "Usando --web-renderer canvaskit"
             flutter build web --release --web-renderer canvaskit \
               --base-href /p/${{ github.event.inputs.slug }}/
           else
-            echo "Sem flag --web-renderer; usando padrão"
             flutter build web --release \
               --base-href /p/${{ github.event.inputs.slug }}/
           fi
 
-      - name: Deploy (rsync)
+      - name: Rsync para o servidor
         run: |
           rsync -avzr --delete \
             -e "ssh -i ~/.ssh/id_rsa -p ${{ secrets.SSH_PORT || 22 }}" \
-            "${{ env.PATH_SRC }}/build/web/"/ \
+            _src/build/web/ \
             ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/var/www/pages/${{ github.event.inputs.domain }}/${{ github.event.inputs.slug }}/
 
       - name: Gravar version.txt no destino
         run: |
           ssh -i ~/.ssh/id_rsa -p "${{ secrets.SSH_PORT || 22 }}" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-            "printf 'domain=%s\nslug=%s\nkind=%s\ncommit=%s\nrun_id=%s\ndate=%s\n' \
-             '${{ github.event.inputs.domain }}' '${{ github.event.inputs.slug }}' 'flutter_zip' \
+            "printf 'domain=%s\nslug=%s\nzip_url=%s\ncommit=%s\nrun_id=%s\ndate=%s\n' \
+             '${{ github.event.inputs.domain }}' '${{ github.event.inputs.slug }}' '${{ github.event.inputs.zip_url }}' \
              '${{ github.sha }}' '${{ github.run_id }}' \"\$(date -u +'%F %T UTC')\" \
              > /var/www/pages/${{ github.event.inputs.domain }}/${{ github.event.inputs.slug }}/version.txt"
