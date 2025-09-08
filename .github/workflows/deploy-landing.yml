@@ -14,7 +14,7 @@ on:
       kind:
         description: 'Tipo de fonte'
         type: choice
-        # adicionamos flutter_zip para aceitar ZIP com código Flutter
+        # incluímos flutter_zip para aceitar ZIP com código Flutter
         options: [zip_repo, zip_url, flutter_git, flutter_zip, vite_git]
         required: true
       # para *_git
@@ -31,11 +31,11 @@ on:
         required: false
       # para zip_url
       zip_url:
-        description: 'URL pública do ZIP (para zip_url/flutter_zip via URL)'
+        description: 'URL pública do ZIP (zip_url ou flutter_zip via URL)'
         required: false
       # para zip_repo
       zip_path:
-        description: 'Caminho do ZIP dentro deste repo (para zip_repo/flutter_zip), ex: uploads/meu-site.zip'
+        description: 'Caminho do ZIP dentro deste repo (zip_repo ou flutter_zip), ex: uploads/app.zip'
         required: false
 
 permissions:
@@ -65,9 +65,9 @@ jobs:
           ssh -i ~/.ssh/id_rsa -p "${{ secrets.SSH_PORT || 22 }}" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
             "[ -d /var/www/pages/${{ github.event.inputs.domain }} ] || { echo 'Domínio não preparado no servidor'; exit 1; }"
 
-      # ===== Fontes GIT =====
+      # ====================== FONTES via GIT ======================
       - name: Checkout fonte (GIT)
-        if: ${{ startsWith(github.event.inputs.kind, 'flutter_') || startsWith(github.event.inputs.kind, 'vite_') && github.event.inputs.kind == 'vite_git' }}
+        if: ${{ github.event.inputs.kind == 'flutter_git' || github.event.inputs.kind == 'vite_git' }}
         uses: actions/checkout@v4
         with:
           repository: ${{ github.event.inputs.repo || github.repository }}
@@ -88,25 +88,20 @@ jobs:
             echo "PATH_SRC=$CAND" >> $GITHUB_ENV
           fi
 
-      # ===== ZIP estático (URL) =====
+      # ====================== ZIP ESTÁTICO ======================
       - name: Obter ZIP (zip_url)
         if: ${{ github.event.inputs.kind == 'zip_url' }}
-        run: |
-          curl -L "${{ github.event.inputs.zip_url }}" -o site.zip
+        run: curl -L "${{ github.event.inputs.zip_url }}" -o site.zip
 
-      # ===== ZIP estático (repo) =====
       - name: Obter ZIP (zip_repo)
         if: ${{ github.event.inputs.kind == 'zip_repo' }}
         run: |
           ZIP="${{ github.event.inputs.zip_path }}"
           [ -n "$ZIP" ] || { echo "zip_path obrigatório para zip_repo"; exit 1; }
-          case "$ZIP" in
-            /*|*..*) echo "zip_path inválido (não usar / absoluto ou ..)"; exit 1;;
-          esac
+          case "$ZIP" in /*|*..*) echo "zip_path inválido (não usar / absoluto ou ..)"; exit 1;; esac
           [ -f "$ZIP" ] || { echo "Arquivo não encontrado: $ZIP"; exit 1; }
           cp "$ZIP" site.zip
 
-      # ===== Preparar DIST a partir do ZIP estático =====
       - name: Descompactar ZIP e validar index
         if: ${{ startsWith(github.event.inputs.kind, 'zip_') }}
         run: |
@@ -114,20 +109,17 @@ jobs:
           test -f _zip/index.html || { echo "ZIP precisa conter index.html na raiz"; exit 1; }
           echo "DIST=_zip" >> $GITHUB_ENV
 
-      # ===== Flutter ZIP (código-fonte em ZIP) =====
+      # ====================== FLUTTER via ZIP (CÓDIGO-FONTE) ======================
       - name: Obter ZIP Flutter (via URL)
         if: ${{ github.event.inputs.kind == 'flutter_zip' && github.event.inputs.zip_url != '' }}
-        run: |
-          curl -L "${{ github.event.inputs.zip_url }}" -o flutter_src.zip
+        run: curl -L "${{ github.event.inputs.zip_url }}" -o flutter_src.zip
 
       - name: Obter ZIP Flutter (via repo)
         if: ${{ github.event.inputs.kind == 'flutter_zip' && github.event.inputs.zip_url == '' }}
         run: |
           ZIP="${{ github.event.inputs.zip_path }}"
           [ -n "$ZIP" ] || { echo "zip_path OU zip_url obrigatório para flutter_zip"; exit 1; }
-          case "$ZIP" in
-            /*|*..*) echo "zip_path inválido (não usar / absoluto ou ..)"; exit 1;;
-          esac
+          case "$ZIP" in /*|*..*) echo "zip_path inválido (não usar / absoluto ou ..)"; exit 1;; esac
           [ -f "$ZIP" ] || { echo "Arquivo não encontrado: $ZIP"; exit 1; }
           cp "$ZIP" flutter_src.zip
 
@@ -137,7 +129,6 @@ jobs:
           rm -rf _src
           mkdir -p _src
           unzip -q flutter_src.zip -d _src_unpack
-          # Se o ZIP tiver uma pasta raiz única, nivele:
           ONE=$(ls -1 _src_unpack | wc -l)
           if [ "$ONE" -eq 1 ] && [ -d "_src_unpack/$(ls -1 _src_unpack)" ]; then
             mv "_src_unpack/$(ls -1 _src_unpack)"/* _src/
@@ -147,7 +138,7 @@ jobs:
           rm -rf _src_unpack
           echo "PATH_SRC=_src" >> $GITHUB_ENV
 
-      # ===== Arquivar a fonte no repo ops (zip ou git ou flutter_zip) =====
+      # ====================== ARQUIVAR A FONTE ======================
       - name: Arquivar fonte
         run: |
           TS=$(date +%Y%m%d-%H%M%S)
@@ -155,27 +146,18 @@ jobs:
           mkdir -p "$DEST"
           case "${{ github.event.inputs.kind }}" in
             zip_url)
-              cp site.zip "$DEST/source-$TS.zip"
-              SRCINFO="zip_url=${{ github.event.inputs.zip_url }}"
-              ;;
+              cp site.zip "$DEST/source-$TS.zip"; SRCINFO="zip_url=${{ github.event.inputs.zip_url }}";;
             zip_repo)
-              cp site.zip "$DEST/source-$TS.zip"
-              SRCINFO="zip_repo=${{ github.event.inputs.zip_path }}"
-              ;;
+              cp site.zip "$DEST/source-$TS.zip"; SRCINFO="zip_repo=${{ github.event.inputs.zip_path }}";;
             flutter_zip)
               (cd "_src" && zip -qr "$GITHUB_WORKSPACE/$DEST/source-$TS.zip" .)
-              if [ -n "${{ github.event.inputs.zip_url }}" ]; then
-                SRCINFO="flutter_zip_url=${{ github.event.inputs.zip_url }}"
-              else
-                SRCINFO="flutter_zip_repo=${{ github.event.inputs.zip_path }}"
-              fi
+              if [ -n "${{ github.event.inputs.zip_url }}" ]; then SRCINFO="flutter_zip_url=${{ github.event.inputs.zip_url }}"; else SRCINFO="flutter_zip_repo=${{ github.event.inputs.zip_path }}"; fi
               ;;
             *)
               (cd "${{ env.PATH_SRC }}" && zip -qr "$GITHUB_WORKSPACE/$DEST/source-$TS.zip" .)
               SRCINFO="repo=${{ github.event.inputs.repo || github.repository }}, ref=${{ github.event.inputs.ref }}, subdir=${{ github.event.inputs.subdir || '.' }}"
               ;;
           esac
-
           cat > "$DEST/meta.json" <<META
           { "domain": "${{ github.event.inputs.domain }}",
             "slug":   "${{ github.event.inputs.slug }}",
@@ -185,32 +167,28 @@ jobs:
             "commit": "${{ github.sha }}",
             "archived_at": "$TS" }
           META
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "$DEST"
           git commit -m "archive: ${{ github.event.inputs.domain }}/p/${{ github.event.inputs.slug }} [skip ci]" || true
           git push || true
 
-      # ===== Builds =====
+      # ====================== BUILDS ======================
       - name: Setup Flutter
         if: ${{ github.event.inputs.kind == 'flutter_git' || github.event.inputs.kind == 'flutter_zip' }}
         uses: subosito/flutter-action@v2
         with:
           channel: stable
 
-      # Cache do pub (sem usar + na expressão!)
-      - name: Cache do pub (deps Flutter)
+      # cache mais “safe” (sem concatenação/format)
+      - name: Cache do pub
         if: ${{ github.event.inputs.kind == 'flutter_git' || github.event.inputs.kind == 'flutter_zip' }}
         uses: actions/cache@v4
         with:
           path: |
             ~/.pub-cache
             ${{ env.PATH_SRC }}/.dart_tool
-          key: ${{ runner.os }}-pub-${{ hashFiles(
-            format('{0}/pubspec.lock', env.PATH_SRC),
-            format('{0}/pubspec.yaml',  env.PATH_SRC)
-          ) }}
+          key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.lock') }}
           restore-keys: |
             ${{ runner.os }}-pub-
 
@@ -253,7 +231,7 @@ jobs:
           npm run build
           echo "DIST=${{ env.PATH_SRC }}/dist" >> $GITHUB_ENV
 
-      # ===== Deploy =====
+      # ====================== DEPLOY ======================
       - name: Rsync pro servidor
         run: |
           rsync -avzr --delete \
