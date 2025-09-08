@@ -14,7 +14,8 @@ on:
       kind:
         description: 'Tipo de fonte'
         type: choice
-        options: [zip_repo, zip_url, flutter_git, vite_git]
+        # adicionamos flutter_zip para aceitar ZIP com código Flutter
+        options: [zip_repo, zip_url, flutter_git, flutter_zip, vite_git]
         required: true
       # para *_git
       repo:
@@ -30,11 +31,11 @@ on:
         required: false
       # para zip_url
       zip_url:
-        description: 'URL pública do ZIP (para zip_url; projeto Flutter na raiz com pubspec.yaml)'
+        description: 'URL pública do ZIP (para zip_url/flutter_zip via URL)'
         required: false
       # para zip_repo
       zip_path:
-        description: 'Caminho do ZIP dentro deste repo (para zip_repo), ex: uploads/meu-app.zip'
+        description: 'Caminho do ZIP dentro deste repo (para zip_repo/flutter_zip), ex: uploads/meu-site.zip'
         required: false
 
 permissions:
@@ -66,15 +67,15 @@ jobs:
 
       # ===== Fontes GIT =====
       - name: Checkout fonte (GIT)
-        if: ${{ startsWith(github.event.inputs.kind, 'flutter_') || startsWith(github.event.inputs.kind, 'vite_') }}
+        if: ${{ startsWith(github.event.inputs.kind, 'flutter_') || startsWith(github.event.inputs.kind, 'vite_') && github.event.inputs.kind == 'vite_git' }}
         uses: actions/checkout@v4
         with:
           repository: ${{ github.event.inputs.repo || github.repository }}
           ref: ${{ github.event.inputs.ref }}
           path: _src
 
-      - name: Definir paths (com fallback)
-        if: ${{ startsWith(github.event.inputs.kind, 'flutter_') || startsWith(github.event.inputs.kind, 'vite_') }}
+      - name: Definir paths (com fallback) — GIT
+        if: ${{ github.event.inputs.kind == 'flutter_git' || github.event.inputs.kind == 'vite_git' }}
         run: |
           REQ="${{ github.event.inputs.subdir || '.' }}"
           CAND="_src/$REQ"
@@ -87,13 +88,13 @@ jobs:
             echo "PATH_SRC=$CAND" >> $GITHUB_ENV
           fi
 
-      # ===== Fonte ZIP (URL) =====
+      # ===== ZIP estático (URL) =====
       - name: Obter ZIP (zip_url)
         if: ${{ github.event.inputs.kind == 'zip_url' }}
         run: |
           curl -L "${{ github.event.inputs.zip_url }}" -o site.zip
 
-      # ===== Fonte ZIP (repo) =====
+      # ===== ZIP estático (repo) =====
       - name: Obter ZIP (zip_repo)
         if: ${{ github.event.inputs.kind == 'zip_repo' }}
         run: |
@@ -105,89 +106,76 @@ jobs:
           [ -f "$ZIP" ] || { echo "Arquivo não encontrado: $ZIP"; exit 1; }
           cp "$ZIP" site.zip
 
-      # ===== (ALTERADO) Preparar DIST a partir do ZIP (Flutter Web) =====
-      - name: Descompactar ZIP para _src (Flutter)
+      # ===== Preparar DIST a partir do ZIP estático =====
+      - name: Descompactar ZIP e validar index
         if: ${{ startsWith(github.event.inputs.kind, 'zip_') }}
         run: |
-          rm -rf _src && mkdir -p _src
-          unzip -o site.zip -d _src
-          test -f _src/pubspec.yaml || { echo "pubspec.yaml não encontrado na raiz do ZIP (esperado projeto Flutter)"; exit 1; }
+          unzip -o site.zip -d _zip
+          test -f _zip/index.html || { echo "ZIP precisa conter index.html na raiz"; exit 1; }
+          echo "DIST=_zip" >> $GITHUB_ENV
+
+      # ===== Flutter ZIP (código-fonte em ZIP) =====
+      - name: Obter ZIP Flutter (via URL)
+        if: ${{ github.event.inputs.kind == 'flutter_zip' && github.event.inputs.zip_url != '' }}
+        run: |
+          curl -L "${{ github.event.inputs.zip_url }}" -o flutter_src.zip
+
+      - name: Obter ZIP Flutter (via repo)
+        if: ${{ github.event.inputs.kind == 'flutter_zip' && github.event.inputs.zip_url == '' }}
+        run: |
+          ZIP="${{ github.event.inputs.zip_path }}"
+          [ -n "$ZIP" ] || { echo "zip_path OU zip_url obrigatório para flutter_zip"; exit 1; }
+          case "$ZIP" in
+            /*|*..*) echo "zip_path inválido (não usar / absoluto ou ..)"; exit 1;;
+          esac
+          [ -f "$ZIP" ] || { echo "Arquivo não encontrado: $ZIP"; exit 1; }
+          cp "$ZIP" flutter_src.zip
+
+      - name: Descompactar Flutter ZIP
+        if: ${{ github.event.inputs.kind == 'flutter_zip' }}
+        run: |
+          rm -rf _src
+          mkdir -p _src
+          unzip -q flutter_src.zip -d _src_unpack
+          # Se o ZIP tiver uma pasta raiz única, nivele:
+          ONE=$(ls -1 _src_unpack | wc -l)
+          if [ "$ONE" -eq 1 ] && [ -d "_src_unpack/$(ls -1 _src_unpack)" ]; then
+            mv "_src_unpack/$(ls -1 _src_unpack)"/* _src/
+          else
+            mv _src_unpack/* _src/
+          fi
+          rm -rf _src_unpack
           echo "PATH_SRC=_src" >> $GITHUB_ENV
 
-      # ===== Cache do Flutter (opcional, acelera build) =====
-      - name: Cache pub (Flutter)
-        if: ${{ startsWith(github.event.inputs.kind, 'zip_') || github.event.inputs.kind == 'flutter_git' }}
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.pub-cache
-            ${{ env.PATH_SRC }}/.dart_tool
-          key: ${{ runner.os }}-pub-${{ hashFiles(env.PATH_SRC + '/pubspec.lock', env.PATH_SRC + '/pubspec.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pub-
-
-      # ===== Setup Flutter =====
-      - name: Setup Flutter
-        if: ${{ startsWith(github.event.inputs.kind, 'zip_') || github.event.inputs.kind == 'flutter_git' }}
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-
-      # ===== Build Flutter Web (ZIP) =====
-      - name: Build Flutter Web (ZIP)
-        if: ${{ startsWith(github.event.inputs.kind, 'zip_') }}
-        working-directory: ${{ env.PATH_SRC }}
-        run: |
-          set -e
-          flutter --version
-          flutter clean
-          flutter config --enable-web
-          flutter pub get
-          if flutter build web -h | grep -q -- '--web-renderer'; then
-            flutter build web --release --web-renderer canvaskit \
-              --base-href /p/${{ github.event.inputs.slug }}/
-          else
-            flutter build web --release \
-              --base-href /p/${{ github.event.inputs.slug }}/
-          fi
-          echo "DIST=${PWD}/build/web" >> $GITHUB_ENV
-
-      # ===== Build Flutter Web (GIT) =====
-      - name: Build Flutter Web (GIT)
-        if: ${{ github.event.inputs.kind == 'flutter_git' }}
-        working-directory: ${{ env.PATH_SRC }}
-        run: |
-          set -e
-          flutter --version
-          flutter clean
-          flutter config --enable-web
-          flutter pub get
-          if flutter build web -h | grep -q -- '--web-renderer'; then
-            flutter build web --release --web-renderer canvaskit \
-              --base-href /p/${{ github.event.inputs.slug }}/
-          else
-            flutter build web --release \
-              --base-href /p/${{ github.event.inputs.slug }}/
-          fi
-          echo "DIST=${PWD}/build/web" >> $GITHUB_ENV
-
-      # ===== Arquivar a fonte no repo ops =====
-      - name: Arquivar fonte (zip ou git)
+      # ===== Arquivar a fonte no repo ops (zip ou git ou flutter_zip) =====
+      - name: Arquivar fonte
         run: |
           TS=$(date +%Y%m%d-%H%M%S)
           DEST="$ARCHIVE_ROOT/${{ github.event.inputs.domain }}/${{ github.event.inputs.slug }}"
           mkdir -p "$DEST"
-          if [[ "${{ github.event.inputs.kind }}" == zip_url || "${{ github.event.inputs.kind }}" == zip_repo ]]; then
-            cp site.zip "$DEST/source-$TS.zip"
-            if [[ "${{ github.event.inputs.kind }}" == zip_url ]]; then
+          case "${{ github.event.inputs.kind }}" in
+            zip_url)
+              cp site.zip "$DEST/source-$TS.zip"
               SRCINFO="zip_url=${{ github.event.inputs.zip_url }}"
-            else
+              ;;
+            zip_repo)
+              cp site.zip "$DEST/source-$TS.zip"
               SRCINFO="zip_repo=${{ github.event.inputs.zip_path }}"
-            fi
-          else
-            (cd "$PATH_SRC" && zip -qr "$GITHUB_WORKSPACE/$DEST/source-$TS.zip" .)
-            SRCINFO="repo=${{ github.event.inputs.repo || github.repository }}, ref=${{ github.event.inputs.ref }}, subdir=${{ github.event.inputs.subdir || '.' }}"
-          fi
+              ;;
+            flutter_zip)
+              (cd "_src" && zip -qr "$GITHUB_WORKSPACE/$DEST/source-$TS.zip" .)
+              if [ -n "${{ github.event.inputs.zip_url }}" ]; then
+                SRCINFO="flutter_zip_url=${{ github.event.inputs.zip_url }}"
+              else
+                SRCINFO="flutter_zip_repo=${{ github.event.inputs.zip_path }}"
+              fi
+              ;;
+            *)
+              (cd "${{ env.PATH_SRC }}" && zip -qr "$GITHUB_WORKSPACE/$DEST/source-$TS.zip" .)
+              SRCINFO="repo=${{ github.event.inputs.repo || github.repository }}, ref=${{ github.event.inputs.ref }}, subdir=${{ github.event.inputs.subdir || '.' }}"
+              ;;
+          esac
+
           cat > "$DEST/meta.json" <<META
           { "domain": "${{ github.event.inputs.domain }}",
             "slug":   "${{ github.event.inputs.slug }}",
@@ -197,11 +185,73 @@ jobs:
             "commit": "${{ github.sha }}",
             "archived_at": "$TS" }
           META
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "$DEST"
           git commit -m "archive: ${{ github.event.inputs.domain }}/p/${{ github.event.inputs.slug }} [skip ci]" || true
           git push || true
+
+      # ===== Builds =====
+      - name: Setup Flutter
+        if: ${{ github.event.inputs.kind == 'flutter_git' || github.event.inputs.kind == 'flutter_zip' }}
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      # Cache do pub (sem usar + na expressão!)
+      - name: Cache do pub (deps Flutter)
+        if: ${{ github.event.inputs.kind == 'flutter_git' || github.event.inputs.kind == 'flutter_zip' }}
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+            ${{ env.PATH_SRC }}/.dart_tool
+          key: ${{ runner.os }}-pub-${{ hashFiles(
+            format('{0}/pubspec.lock', env.PATH_SRC),
+            format('{0}/pubspec.yaml',  env.PATH_SRC)
+          ) }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Flutter pub get
+        if: ${{ github.event.inputs.kind == 'flutter_git' || github.event.inputs.kind == 'flutter_zip' }}
+        working-directory: ${{ env.PATH_SRC }}
+        run: flutter pub get
+
+      - name: Build Flutter Web
+        if: ${{ github.event.inputs.kind == 'flutter_git' || github.event.inputs.kind == 'flutter_zip' }}
+        working-directory: ${{ env.PATH_SRC }}
+        run: |
+          set -e
+          flutter clean
+          flutter config --enable-web
+          if flutter build web -h | grep -q -- '--web-renderer'; then
+            echo "Usando --web-renderer canvaskit"
+            flutter build web --release --web-renderer canvaskit \
+              --base-href /p/${{ github.event.inputs.slug }}/
+          else
+            echo "Flag --web-renderer indisponível; seguindo sem ela."
+            flutter build web --release \
+              --base-href /p/${{ github.event.inputs.slug }}/
+          fi
+          echo "DIST=${PWD}/build/web" >> $GITHUB_ENV
+
+      - name: Setup Node
+        if: ${{ github.event.inputs.kind == 'vite_git' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build Vite/React
+        if: ${{ github.event.inputs.kind == 'vite_git' }}
+        working-directory: ${{ env.PATH_SRC }}
+        env:
+          BASE_PATH: /p/${{ github.event.inputs.slug }}/
+        run: |
+          npm ci
+          npm run build
+          echo "DIST=${{ env.PATH_SRC }}/dist" >> $GITHUB_ENV
 
       # ===== Deploy =====
       - name: Rsync pro servidor
