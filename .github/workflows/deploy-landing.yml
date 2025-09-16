@@ -6,7 +6,7 @@ on:
       domain:
         description: 'Domínio'
         type: choice
-        options: [pinacle.com.br, gestordecapitais.com]
+        options: [pinacle.com.br, gestordecapitais.com, tetramusic.com.br]
         required: true
       slug:
         description: 'Slug (a-z0-9-)'
