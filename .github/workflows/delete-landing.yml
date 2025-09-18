@@ -1,0 +1,62 @@
+name: Delete Landing
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domínio'
+        type: choice
+        options: [pinacle.com.br, gestordecapitais.com, tetramusic.com.br]
+        required: true
+      slug:
+        description: 'Slug (a-z0-9-)'
+        required: true
+  repository_dispatch:
+    types: [delete-landing]  # permite disparo via API/Backend
+
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Preparar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          SSH_PORT="${{ secrets.SSH_PORT || 22 }}"
+          ssh-keyscan -p "${SSH_PORT}" -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Resolver domain/slug (manual x externo)
+        id: resolve
+        run: |
+          if [ -n "${{ github.event.inputs.domain }}" ]; then
+            echo "domain=${{ github.event.inputs.domain }}" >> $GITHUB_OUTPUT
+            echo "slug=${{ github.event.inputs.slug }}" >> $GITHUB_OUTPUT
+          else
+            echo "domain=${{ github.event.client_payload.domain }}" >> $GITHUB_OUTPUT
+            echo "slug=${{ github.event.client_payload.slug }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Apagar pasta do deploy
+        env:
+          SSH_PORT: ${{ secrets.SSH_PORT || 22 }}
+          DOMAIN: ${{ steps.resolve.outputs.domain }}
+          SLUG: ${{ steps.resolve.outputs.slug }}
+        run: |
+          set -euo pipefail
+          echo "Apagando /var/www/pages/${DOMAIN}/${SLUG}"
+          ssh -i ~/.ssh/id_rsa -p "${SSH_PORT}" "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" 'bash -s' <<'EOF'
+          set -euo pipefail
+          DOMAIN="${DOMAIN}"
+          SLUG="${SLUG}"
+          [[ "$DOMAIN" =~ ^[a-z0-9.-]+$ ]] || { echo "domain inválido"; exit 1; }
+          [[ "$SLUG"   =~ ^[a-z0-9-]{1,64}$ ]] || { echo "slug inválido"; exit 1; }
+          TARGET="/var/www/pages/$DOMAIN/$SLUG"
+          if [ -d "$TARGET" ]; then
+            rm -rf -- "$TARGET"
+            echo "Apagado: $TARGET"
+          else
+            echo "Nada para apagar: $TARGET"
+          fi
+          EOF
