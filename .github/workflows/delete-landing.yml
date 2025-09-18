@@ -24,7 +24,7 @@ jobs:
           GH_SSH_HOST: ${{ secrets.SSH_HOST }}
           GH_SSH_USER: ${{ secrets.SSH_USER }}
           GH_SSH_KEY:  ${{ secrets.SSH_KEY }}
-          GH_SSH_PORT: ${{ secrets.SSH_PORT }} # pode estar vazio
+          GH_SSH_PORT: ${{ secrets.SSH_PORT }}  # pode estar vazio
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
@@ -32,19 +32,19 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           SSH_PORT="${GH_SSH_PORT:-22}"
           ssh-keyscan -p "${SSH_PORT}" -H "${GH_SSH_HOST}" >> ~/.ssh/known_hosts
-          echo "SSH_PORT=${SSH_PORT}" >> $GITHUB_ENV
-          echo "SSH_HOST=${GH_SSH_HOST}" >> $GITHUB_ENV
-          echo "SSH_USER=${GH_SSH_USER}" >> $GITHUB_ENV
+          echo "SSH_PORT=${SSH_PORT}"   >> "${GITHUB_ENV}"
+          echo "SSH_HOST=${GH_SSH_HOST}" >> "${GITHUB_ENV}"
+          echo "SSH_USER=${GH_SSH_USER}" >> "${GITHUB_ENV}"
 
       - name: Resolver domain/slug (manual x externo)
         id: resolve
         run: |
           if [ -n "${{ github.event.inputs.domain }}" ]; then
-            echo "domain=${{ github.event.inputs.domain }}" >> $GITHUB_OUTPUT
-            echo "slug=${{ github.event.inputs.slug }}" >> $GITHUB_OUTPUT
+            echo "domain=${{ github.event.inputs.domain }}" >> "${GITHUB_OUTPUT}"
+            echo "slug=${{ github.event.inputs.slug }}"     >> "${GITHUB_OUTPUT}"
           else
-            echo "domain=${{ github.event.client_payload.domain }}" >> $GITHUB_OUTPUT
-            echo "slug=${{ github.event.client_payload.slug }}" >> $GITHUB_OUTPUT
+            echo "domain=${{ github.event.client_payload.domain }}" >> "${GITHUB_OUTPUT}"
+            echo "slug=${{ github.event.client_payload.slug }}"     >> "${GITHUB_OUTPUT}"
           fi
 
       - name: Apagar pasta do deploy
@@ -60,7 +60,7 @@ jobs:
           set -euo pipefail
 
           # Validações defensivas
-          [[ "${DOMAIN}" =~ ^[a-z0-9.-]+$ ]]    || { echo "domain inválido"; exit 1; }
+          [[ "${DOMAIN}" =~ ^[a-z0-9.-]+$ ]]     || { echo "domain inválido"; exit 1; }
           [[ "${SLUG}"   =~ ^[a-z0-9-]{1,64}$ ]] || { echo "slug inválido"; exit 1; }
 
           TARGET="/var/www/pages/${DOMAIN}/${SLUG}"
@@ -70,4 +70,4 @@ jobs:
           else
             echo "Nada para apagar: ${TARGET}"
           fi
-EOF
+          EOF
