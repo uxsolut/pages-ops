@@ -20,12 +20,21 @@ jobs:
 
     steps:
       - name: Preparar SSH
+        env:
+          GH_SSH_HOST: ${{ secrets.SSH_HOST }}
+          GH_SSH_USER: ${{ secrets.SSH_USER }}
+          GH_SSH_KEY:  ${{ secrets.SSH_KEY }}
+          GH_SSH_PORT: ${{ secrets.SSH_PORT }} # pode estar vazio
         run: |
+          set -euo pipefail
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_rsa
+          printf "%s" "${GH_SSH_KEY}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          SSH_PORT="${{ secrets.SSH_PORT || 22 }}"
-          ssh-keyscan -p "${SSH_PORT}" -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+          SSH_PORT="${GH_SSH_PORT:-22}"
+          ssh-keyscan -p "${SSH_PORT}" -H "${GH_SSH_HOST}" >> ~/.ssh/known_hosts
+          echo "SSH_PORT=${SSH_PORT}" >> $GITHUB_ENV
+          echo "SSH_HOST=${GH_SSH_HOST}" >> $GITHUB_ENV
+          echo "SSH_USER=${GH_SSH_USER}" >> $GITHUB_ENV
 
       - name: Resolver domain/slug (manual x externo)
         id: resolve
@@ -40,18 +49,18 @@ jobs:
 
       - name: Apagar pasta do deploy
         env:
-          SSH_PORT: ${{ secrets.SSH_PORT || 22 }}
           DOMAIN: ${{ steps.resolve.outputs.domain }}
-          SLUG: ${{ steps.resolve.outputs.slug }}
+          SLUG:   ${{ steps.resolve.outputs.slug }}
         run: |
           set -euo pipefail
           echo "Apagando /var/www/pages/${DOMAIN}/${SLUG}"
-          ssh -i ~/.ssh/id_rsa -p "${SSH_PORT}" "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+
+          ssh -i ~/.ssh/id_rsa -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}" \
             "DOMAIN='${DOMAIN}' SLUG='${SLUG}' bash -s" <<'EOF'
           set -euo pipefail
 
           # Validações defensivas
-          [[ "${DOMAIN}" =~ ^[a-z0-9.-]+$ ]] || { echo "domain inválido"; exit 1; }
+          [[ "${DOMAIN}" =~ ^[a-z0-9.-]+$ ]]    || { echo "domain inválido"; exit 1; }
           [[ "${SLUG}"   =~ ^[a-z0-9-]{1,64}$ ]] || { echo "slug inválido"; exit 1; }
 
           TARGET="/var/www/pages/${DOMAIN}/${SLUG}"
