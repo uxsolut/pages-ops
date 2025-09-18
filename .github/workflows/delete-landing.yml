@@ -46,17 +46,19 @@ jobs:
         run: |
           set -euo pipefail
           echo "Apagando /var/www/pages/${DOMAIN}/${SLUG}"
-          ssh -i ~/.ssh/id_rsa -p "${SSH_PORT}" "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" 'bash -s' <<'EOF'
+          ssh -i ~/.ssh/id_rsa -p "${SSH_PORT}" "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+            "DOMAIN='${DOMAIN}' SLUG='${SLUG}' bash -s" <<'EOF'
           set -euo pipefail
-          DOMAIN="${DOMAIN}"
-          SLUG="${SLUG}"
-          [[ "$DOMAIN" =~ ^[a-z0-9.-]+$ ]] || { echo "domain inválido"; exit 1; }
-          [[ "$SLUG"   =~ ^[a-z0-9-]{1,64}$ ]] || { echo "slug inválido"; exit 1; }
-          TARGET="/var/www/pages/$DOMAIN/$SLUG"
-          if [ -d "$TARGET" ]; then
-            rm -rf -- "$TARGET"
-            echo "Apagado: $TARGET"
+
+          # Validações defensivas
+          [[ "${DOMAIN}" =~ ^[a-z0-9.-]+$ ]] || { echo "domain inválido"; exit 1; }
+          [[ "${SLUG}"   =~ ^[a-z0-9-]{1,64}$ ]] || { echo "slug inválido"; exit 1; }
+
+          TARGET="/var/www/pages/${DOMAIN}/${SLUG}"
+          if [ -d "${TARGET}" ]; then
+            rm -rf -- "${TARGET}"
+            echo "Apagado: ${TARGET}"
           else
-            echo "Nada para apagar: $TARGET"
+            echo "Nada para apagar: ${TARGET}"
           fi
-          EOF
+EOF
