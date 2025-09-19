@@ -9,7 +9,7 @@ on:
         options: [pinacle.com.br, gestordecapitais.com, tetramusic.com.br]
         required: true
       slug:
-        description: 'Slug (a-z0-9-)'
+        description: 'Slug (a-z0-9- ou beta/dev + slug, ex.: "legal" ou "beta/legal")'
         required: true
   repository_dispatch:
     types: [delete-landing]  # permite disparo via API/Backend
@@ -32,7 +32,7 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           SSH_PORT="${GH_SSH_PORT:-22}"
           ssh-keyscan -p "${SSH_PORT}" -H "${GH_SSH_HOST}" >> ~/.ssh/known_hosts
-          echo "SSH_PORT=${SSH_PORT}"   >> "${GITHUB_ENV}"
+          echo "SSH_PORT=${SSH_PORT}"    >> "${GITHUB_ENV}"
           echo "SSH_HOST=${GH_SSH_HOST}" >> "${GITHUB_ENV}"
           echo "SSH_USER=${GH_SSH_USER}" >> "${GITHUB_ENV}"
 
@@ -60,8 +60,9 @@ jobs:
           set -euo pipefail
 
           # Validações defensivas
-          [[ "${DOMAIN}" =~ ^[a-z0-9.-]+$ ]]     || { echo "domain inválido"; exit 1; }
-          [[ "${SLUG}"   =~ ^[a-z0-9-]{1,64}$ ]] || { echo "slug inválido"; exit 1; }
+          [[ "${DOMAIN}" =~ ^[a-z0-9.-]+$ ]] || { echo "domain inválido"; exit 1; }
+          # aceita "slug" OU "beta/slug" OU "dev/slug"
+          [[ "${SLUG}" =~ ^([a-z0-9-]{1,64}|(beta|dev)/[a-z0-9-]{1,64})$ ]] || { echo "slug inválido"; exit 1; }
 
           TARGET="/var/www/pages/${DOMAIN}/${SLUG}"
           if [ -d "${TARGET}" ]; then
