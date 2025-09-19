@@ -9,7 +9,7 @@ on:
         options: [pinacle.com.br, gestordecapitais.com, tetramusic.com.br]
         required: true
       slug:
-        description: 'Slug (a-z0-9-)'
+        description: 'Slug (a-z0-9- ou beta/dev + slug, ex.: "legal" ou "beta/legal")'
         required: true
       zip_url:
         description: 'URL pública do ZIP do Flutter (com pubspec.yaml na raiz)'
@@ -32,7 +32,9 @@ jobs:
 
       - name: Validar slug e preparar SSH
         run: |
-          [[ "${{ github.event.inputs.slug }}" =~ ^[a-z0-9-]{1,64}$ ]] || { echo "Slug inválido. Use [a-z0-9-]{1,64}"; exit 1; }
+          # aceita "slug" OU "beta/slug" OU "dev/slug"
+          [[ "${{ github.event.inputs.slug }}" =~ ^([a-z0-9-]{1,64}|(beta|dev)/[a-z0-9-]{1,64})$ ]] || { echo "Slug inválido. Use slug simples (a-z0-9-) ou prefixado com beta/ ou dev/"; exit 1; }
+
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
