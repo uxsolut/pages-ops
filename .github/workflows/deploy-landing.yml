@@ -69,6 +69,15 @@ jobs:
         working-directory: _src
         run: flutter pub get
 
+      - name: Garantir plataforma Web (se o ZIP não vier com web/)
+        working-directory: _src
+        run: |
+          flutter config --enable-web
+          if [ ! -d "web" ]; then
+            echo "Projeto sem suporte Web; executando flutter create..."
+            flutter create . --platforms web
+          fi
+
       - name: Build Flutter Web (com base-href)
         working-directory: _src
         run: |
