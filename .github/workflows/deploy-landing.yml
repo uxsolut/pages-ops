@@ -57,9 +57,9 @@ jobs:
             exit 1
           fi
 
-          # Derivar estado e folha (parte final) — SEM /p
-          STATE=""
-          LEAF=""
+          # Derivar estado e folha (parte final)
+          STATE=""        # "", "beta", "dev"
+          LEAF=""         # "", ou "<slug>"
           if [[ "$SLUG" == "beta" || "$SLUG" == "dev" ]]; then
             STATE="$SLUG"; LEAF=""
           elif [[ "$SLUG" =~ ^(beta|dev)/.+$ ]]; then
@@ -73,26 +73,26 @@ jobs:
             LEAF=""
           fi
 
-          # BASE_HREF do Flutter — SEM /p
+          # BASE_HREF (para build Flutter) — SEM /p
           #   raiz prod         -> /
           #   prod com slug     -> /<slug>/
           #   beta/dev root     -> /beta/  ou /dev/
           #   beta/dev com slug -> /beta/<slug>/  ou /dev/<slug>/
           if [[ -z "$STATE" ]]; then
             if [[ -z "$LEAF" ]]; then
-              BASE_HREF="/"
+              BASE_HREF="/"                       # prod, homepage
             else
-              BASE_HREF="/${LEAF}/"
+              BASE_HREF="/${LEAF}/"               # prod com slug
             fi
           else
             if [[ -z "$LEAF" ]]; then
-              BASE_HREF="/${STATE}/"
+              BASE_HREF="/${STATE}/"              # beta/dev homepage do estado
             else
-              BASE_HREF="/${STATE}/${LEAF}/"
+              BASE_HREF="/${STATE}/${LEAF}/"      # beta/dev com slug
             fi
           fi
 
-          # Diretório de destino no servidor — SEM /p
+          # Diretório de destino no servidor (inalterado)
           DEST_DIR="/var/www/pages/${DOMAIN}"
           if [[ -z "$STATE" ]]; then
             if [[ -n "$LEAF" ]]; then
