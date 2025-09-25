@@ -9,8 +9,8 @@ on:
         options: [pinacle.com.br, gestordecapitais.com, tetramusic.com.br]
         required: true
       slug:
-        description: 'Slug (a-z0-9- ou beta/dev + slug, ex.: "legal" ou "beta/legal")'
-        required: true
+        description: 'Slug (pode ser vazio, "beta", "dev", "beta/slug", "dev/slug" ou "slug")'
+        required: false
       zip_url:
         description: 'URL pública do ZIP do Flutter (com pubspec.yaml na raiz)'
         required: true
@@ -30,21 +30,102 @@ jobs:
       - name: Checkout (repo ops)
         uses: actions/checkout@v4
 
-      - name: Validar slug e preparar SSH
+      - name: Validar inputs e preparar ambiente
+        id: derive
+        shell: bash
         run: |
-          # aceita "slug" OU "beta/slug" OU "dev/slug"
-          [[ "${{ github.event.inputs.slug }}" =~ ^([a-z0-9-]{1,64}|(beta|dev)/[a-z0-9-]{1,64})$ ]] || { echo "Slug inválido. Use slug simples (a-z0-9-) ou prefixado com beta/ ou dev/"; exit 1; }
+          set -euo pipefail
 
+          DOMAIN="${{ github.event.inputs.domain }}"
+          RAW_SLUG="${{ github.event.inputs.slug }}"
+          ZIP_URL="${{ github.event.inputs.zip_url }}"
+
+          # Normalizar slug (trim)
+          SLUG="$(echo -n "${RAW_SLUG:-}" | sed 's#^/*##; s#/*$##')"
+
+          # Validar domínio
+          case "$DOMAIN" in
+            pinacle.com.br|gestordecapitais.com|tetramusic.com.br) ;;
+            *) echo "Domínio inválido"; exit 1 ;;
+          esac
+
+          # Regras de slug aceitas:
+          #   "" (raiz prod)
+          #   "beta" | "dev" (raiz do estado)
+          #   "beta/<slug>" | "dev/<slug>"
+          #   "<slug>" (a-z0-9-)
+          re_slug='^$|^(beta|dev)$|^(beta|dev)/[a-z0-9-]{1,64}$|^[a-z0-9-]{1,64}$'
+          if [[ ! "$SLUG" =~ $re_slug ]]; then
+            echo "Slug inválido. Use vazio, 'beta', 'dev', 'beta/<slug>', 'dev/<slug>' ou '<slug>' (a-z0-9-)."
+            exit 1
+          fi
+
+          # Derivar estado e rota base
+          STATE=""        # "", "beta", "dev"
+          LEAF=""         # "", ou "<slug>"
+          if [[ "$SLUG" == "beta" || "$SLUG" == "dev" ]]; then
+            STATE="$SLUG"; LEAF=""
+          elif [[ "$SLUG" =~ ^(beta|dev)/.+$ ]]; then
+            STATE="${SLUG%%/*}"
+            LEAF="${SLUG#*/}"
+          elif [[ -n "$SLUG" ]]; then
+            STATE=""
+            LEAF="$SLUG"
+          else
+            STATE=""
+            LEAF=""
+          fi
+
+          # BASE_HREF (para build Flutter)
+          if [[ -z "$STATE" ]]; then
+            if [[ -z "$LEAF" ]]; then
+              BASE_HREF="/"                         # prod, homepage
+            else
+              BASE_HREF="/p/${LEAF}/"               # prod com slug
+            fi
+          else
+            if [[ -z "$LEAF" ]]; then
+              BASE_HREF="/p/${STATE}/"              # beta/dev homepage do estado
+            else
+              BASE_HREF="/p/${STATE}/${LEAF}/"      # beta/dev com slug
+            fi
+          fi
+
+          # Diretório de destino no servidor
+          DEST_DIR="/var/www/pages/${DOMAIN}"
+          if [[ -z "$STATE" ]]; then
+            if [[ -n "$LEAF" ]]; then
+              DEST_DIR="${DEST_DIR}/${LEAF}"
+            fi
+          else
+            if [[ -z "$LEAF" ]]; then
+              DEST_DIR="${DEST_DIR}/${STATE}"
+            else
+              DEST_DIR="${DEST_DIR}/${STATE}/${LEAF}"
+            fi
+          fi
+
+          echo "domain=$DOMAIN"        >> "$GITHUB_OUTPUT"
+          echo "slug=$SLUG"            >> "$GITHUB_OUTPUT"
+          echo "state=$STATE"          >> "$GITHUB_OUTPUT"
+          echo "leaf=$LEAF"            >> "$GITHUB_OUTPUT"
+          echo "base_href=$BASE_HREF"  >> "$GITHUB_OUTPUT"
+          echo "dest_dir=$DEST_DIR"    >> "$GITHUB_OUTPUT"
+          echo "zip_url=$ZIP_URL"      >> "$GITHUB_OUTPUT"
+
+          # Preparar SSH
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -p "${{ secrets.SSH_PORT || 22 }}" -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+
+          # Verificar domínio no servidor
           ssh -i ~/.ssh/id_rsa -p "${{ secrets.SSH_PORT || 22 }}" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-            "[ -d /var/www/pages/${{ github.event.inputs.domain }} ] || { echo 'Domínio não preparado no servidor'; exit 1; }"
+            "[ -d /var/www/pages/${DOMAIN} ] || { echo 'Domínio não preparado no servidor'; exit 1; }"
 
       - name: Baixar ZIP do Flutter
         run: |
-          curl -fL "${{ github.event.inputs.zip_url }}" -o site.zip
+          curl -fL "${{ steps.derive.outputs.zip_url }}" -o site.zip
 
       - name: Conferir estrutura do ZIP
         run: |
@@ -78,36 +159,36 @@ jobs:
             flutter create . --platforms web
           fi
 
-      - name: Build Flutter Web (com base-href)
+      - name: Build Flutter Web (com base-href derivado)
         working-directory: _src
         run: |
           flutter clean
           flutter config --enable-web
           if flutter build web -h | grep -q -- '--web-renderer'; then
             flutter build web --release --web-renderer canvaskit \
-              --base-href /p/${{ github.event.inputs.slug }}/
+              --base-href "${{ steps.derive.outputs.base_href }}"
           else
             flutter build web --release \
-              --base-href /p/${{ github.event.inputs.slug }}/
+              --base-href "${{ steps.derive.outputs.base_href }}"
           fi
 
-      # >>> ADICIONADO: cria a árvore de diretórios destino (suporta beta/dev)
-      - name: Criar diretório destino (suporta beta/dev)
+      - name: Criar diretório destino
         run: |
           ssh -i ~/.ssh/id_rsa -p "${{ secrets.SSH_PORT || 22 }}" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-            "mkdir -p /var/www/pages/${{ github.event.inputs.domain }}/${{ github.event.inputs.slug }}/"
+            "mkdir -p '${{ steps.derive.outputs.dest_dir }}'"
 
       - name: Rsync para o servidor
         run: |
           rsync -avzr --delete \
             -e "ssh -i ~/.ssh/id_rsa -p ${{ secrets.SSH_PORT || 22 }}" \
             _src/build/web/ \
-            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/var/www/pages/${{ github.event.inputs.domain }}/${{ github.event.inputs.slug }}/
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:"${{ steps.derive.outputs.dest_dir }}/"
 
       - name: Gravar version.txt no destino
         run: |
           ssh -i ~/.ssh/id_rsa -p "${{ secrets.SSH_PORT || 22 }}" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-            "printf 'domain=%s\nslug=%s\nzip_url=%s\ncommit=%s\nrun_id=%s\ndate=%s\n' \
-             '${{ github.event.inputs.domain }}' '${{ github.event.inputs.slug }}' '${{ github.event.inputs.zip_url }}' \
+            "printf 'domain=%s\nslug=%s\nzip_url=%s\ncommit=%s\nrun_id=%s\ndate=%s\nbase_href=%s\n' \
+             '${{ steps.derive.outputs.domain }}' '${{ steps.derive.outputs.slug }}' '${{ steps.derive.outputs.zip_url }}' \
              '${{ github.sha }}' '${{ github.run_id }}' \"\$(date -u +'%F %T UTC')\" \
-             > /var/www/pages/${{ github.event.inputs.domain }}/${{ github.event.inputs.slug }}/version.txt"
+             '${{ steps.derive.outputs.base_href }}' \
+             > '${{ steps.derive.outputs.dest_dir }}/version.txt'"
