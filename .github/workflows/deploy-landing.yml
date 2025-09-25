@@ -58,8 +58,8 @@ jobs:
           fi
 
           # Derivar estado e folha (parte final)
-          STATE=""        # "", "beta", "dev"
-          LEAF=""         # "", ou "<slug>"
+          STATE="" # "", "beta", "dev"
+          LEAF=""  # "", ou "<slug>"
           if [[ "$SLUG" == "beta" || "$SLUG" == "dev" ]]; then
             STATE="$SLUG"; LEAF=""
           elif [[ "$SLUG" =~ ^(beta|dev)/.+$ ]]; then
@@ -73,27 +73,22 @@ jobs:
             LEAF=""
           fi
 
-          # ======== BASE_HREF (para build Flutter) — SEM /p ========
-          #   raiz prod         -> /
-          #   prod com slug     -> /<slug>/
-          #   beta/dev root     -> /beta/  ou /dev/
-          #   beta/dev com slug -> /beta/<slug>/  ou /dev/<slug>/
+          # BASE_HREF (para build Flutter)
           if [[ -z "$STATE" ]]; then
             if [[ -z "$LEAF" ]]; then
-              BASE_HREF="/"
+              BASE_HREF="/"                         # prod, homepage (sem /p/)
             else
-              BASE_HREF="/${LEAF}/"
+              BASE_HREF="/p/${LEAF}/"               # prod com slug
             fi
           else
             if [[ -z "$LEAF" ]]; then
-              BASE_HREF="/${STATE}/"
+              BASE_HREF="/p/${STATE}/"              # beta/dev homepage do estado
             else
-              BASE_HREF="/${STATE}/${LEAF}/"
+              BASE_HREF="/p/${STATE}/${LEAF}/"      # beta/dev com slug
             fi
           fi
-          # =========================================================
 
-          # Diretório de destino no servidor (inalterado; também sem /p)
+          # Diretório de destino no servidor
           DEST_DIR="/var/www/pages/${DOMAIN}"
           if [[ -z "$STATE" ]]; then
             if [[ -n "$LEAF" ]]; then
@@ -107,13 +102,13 @@ jobs:
             fi
           fi
 
-          echo "domain=$DOMAIN"        >> "$GITHUB_OUTPUT"
-          echo "slug=$SLUG"            >> "$GITHUB_OUTPUT"
-          echo "state=$STATE"          >> "$GITHUB_OUTPUT"
-          echo "leaf=$LEAF"            >> "$GITHUB_OUTPUT"
-          echo "base_href=$BASE_HREF"  >> "$GITHUB_OUTPUT"
-          echo "dest_dir=$DEST_DIR"    >> "$GITHUB_OUTPUT"
-          echo "zip_url=$ZIP_URL"      >> "$GITHUB_OUTPUT"
+          echo "domain=$DOMAIN"       >> "$GITHUB_OUTPUT"
+          echo "slug=$SLUG"           >> "$GITHUB_OUTPUT"
+          echo "state=$STATE"         >> "$GITHUB_OUTPUT"
+          echo "leaf=$LEAF"           >> "$GITHUB_OUTPUT"
+          echo "base_href=$BASE_HREF" >> "$GITHUB_OUTPUT"
+          echo "dest_dir=$DEST_DIR"   >> "$GITHUB_OUTPUT"
+          echo "zip_url=$ZIP_URL"     >> "$GITHUB_OUTPUT"
 
           # Preparar SSH
           mkdir -p ~/.ssh
@@ -125,7 +120,6 @@ jobs:
           ssh -i ~/.ssh/id_rsa -p "${{ secrets.SSH_PORT || 22 }}" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
             "[ -d /var/www/pages/${DOMAIN} ] || { echo 'Domínio não preparado no servidor'; exit 1; }"
 
-      # ==== DOWNLOAD/UNZIP — exatamente como você já usava ====
       - name: Baixar ZIP do Flutter
         run: |
           curl -fL "${{ steps.derive.outputs.zip_url }}" -o site.zip
@@ -135,7 +129,6 @@ jobs:
           unzip -q site.zip -d _src
           test -f _src/pubspec.yaml || { echo "ZIP deve conter pubspec.yaml na raiz"; exit 1; }
           ls -la _src
-      # =======================================================
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
