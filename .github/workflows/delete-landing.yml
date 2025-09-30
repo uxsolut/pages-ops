@@ -9,8 +9,9 @@ on:
         options: [pinacle.com.br, gestordecapitais.com, tetramusic.com.br]
         required: true
       slug:
-        description: 'Slug (a-z0-9- ou beta/dev + slug, ex.: "legal" ou "beta/legal")'
-        required: true
+        description: 'Slug (a-z0-9- ou beta/dev + slug; deixe em branco p/ raiz)'
+        required: false
+        default: ""
   repository_dispatch:
     types: [delete-landing]  # permite disparo via API/Backend
 
@@ -38,7 +39,6 @@ jobs:
           printf "%s" "${GH_SSH_KEY}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           SSH_PORT="${GH_SSH_PORT:-22}"
-          # pré-aceita a host key apenas para o host/porta informados
           ssh-keyscan -p "${SSH_PORT}" -H "${GH_SSH_HOST}" >> ~/.ssh/known_hosts
           echo "SSH_PORT=${SSH_PORT}"    >> "${GITHUB_ENV}"
           echo "SSH_HOST=${GH_SSH_HOST}" >> "${GITHUB_ENV}"
@@ -50,9 +50,11 @@ jobs:
           set -euo pipefail
           if [ -n "${{ github.event.inputs.domain }}" ]; then
             echo "domain=${{ github.event.inputs.domain }}" >> "${GITHUB_OUTPUT}"
+            # aceita vazio
             echo "slug=${{ github.event.inputs.slug }}"     >> "${GITHUB_OUTPUT}"
           else
             echo "domain=${{ github.event.client_payload.domain }}" >> "${GITHUB_OUTPUT}"
+            # aceita vazio
             echo "slug=${{ github.event.client_payload.slug }}"     >> "${GITHUB_OUTPUT}"
           fi
 
@@ -74,41 +76,50 @@ jobs:
             *) echo "Domínio inválido: ${DOMAIN_TRIM}"; exit 1 ;;
           esac
 
-          # Aceita "slug" OU "beta"|"dev" + "/slug"
-          # Ex.: "legal" | "beta/legal" | "dev/legal"
-          if ! echo "${SLUG}" | grep -Eq '^([a-z0-9-]{1,64}|(beta|dev)/[a-z0-9-]{1,64})$'; then
-            echo "Slug inválido: '${SLUG}'. Use 'meu-slug' ou 'beta/meu-slug' ou 'dev/meu-slug' (a-z0-9-)."
+          # Slug pode ser vazio (apaga landing na raiz),
+          # ou: "meu-slug", "beta/meu-slug", "dev/meu-slug"
+          if ! echo "${SLUG}" | grep -Eq '^$|([a-z0-9-]{1,64}|(beta|dev)/[a-z0-9-]{1,64})$'; then
+            echo "Slug inválido: '${SLUG}'. Deixe em branco p/ raiz ou use 'meu-slug' | 'beta/meu-slug' | 'dev/meu-slug' (a-z0-9-)."
             exit 1
           fi
 
-          # --- Monta caminhos e faz checagens de segurança ---
           ROOT="/var/www/pages/${DOMAIN_TRIM}"
-          TARGET_REL="${SLUG}"                 # já normalizado
-          TARGET_ABS="$(realpath -m "${ROOT}/${TARGET_REL}")"  || { echo "Falha ao resolver caminho"; exit 1; }
-          ROOT_ABS="$(realpath -m "${ROOT}")"  || { echo "Falha ao resolver raiz"; exit 1; }
 
-          echo "ROOT:   ${ROOT_ABS}"
-          echo "TARGET: ${TARGET_ABS}"
+          if [ -z "${SLUG}" ]; then
+            # --- Caso: deletar landing da RAIZ do domínio ---
+            echo "Apagando CONTEÚDO da raiz do domínio: ${ROOT}"
+            ssh -i ~/.ssh/id_rsa -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}" \
+              "set -euo pipefail; \
+               ROOT='${ROOT}'; \
+               if [ ! -d \"\$ROOT\" ]; then echo 'Nada para apagar (raiz inexistente)'; exit 0; fi; \
+               # apaga somente conteúdo (inclui ocultos), preserva a pasta raiz
+               shopt -s dotglob nullglob; \
+               CONTENT=(\"\$ROOT\"/*); \
+               if [ \${#CONTENT[@]} -eq 0 ]; then echo 'Nada para apagar (raiz vazia)'; exit 0; fi; \
+               rm -rf -- \"\$ROOT\"/* \"\$ROOT\"/.[!.]* \"\$ROOT\"/..?* || true; \
+               echo 'Conteúdo da raiz apagado com sucesso.'"
+          else
+            # --- Caso: deletar subdiretório (slug/pasta) ---
+            TARGET_REL="${SLUG}"
+            TARGET_ABS="${ROOT}/${TARGET_REL}"
 
-          # TARGET deve estar dentro de ROOT/
-          case "${TARGET_ABS}" in
-            ${ROOT_ABS}/*) ;;
-            *) echo "Alvo fora da raiz do domínio. Abortando."; exit 1 ;;
-          esac
+            echo "Apagando subdiretório do domínio:"
+            echo "ROOT:   ${ROOT}"
+            echo "TARGET: ${TARGET_ABS}"
 
-          # Bloqueia exclusão da raiz do domínio (apenas subdiretórios)
-          if [ "${TARGET_ABS}" = "${ROOT_ABS}" ]; then
-            echo "Recusado: tentativa de excluir a raiz do domínio."
-            exit 1
+            # Segurança: nunca tente remover a raiz do domínio aqui
+            if [ "${TARGET_ABS}" = "${ROOT}" ]; then
+              echo "Recusado: tentativa de excluir a raiz do domínio."
+              exit 1
+            fi
+
+            ssh -i ~/.ssh/id_rsa -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}" \
+              "set -euo pipefail; \
+               TARGET='${TARGET_ABS}'; \
+               if [ -d \"\$TARGET\" ]; then \
+                 rm -rf -- \"\$TARGET\"; \
+                 echo 'Apagado: '\$TARGET; \
+               else \
+                 echo 'Nada para apagar: '\$TARGET; \
+               fi"
           fi
-
-          # Confere existência e apaga
-          ssh -i ~/.ssh/id_rsa -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}" \
-            "set -euo pipefail; \
-             TARGET='${TARGET_ABS}'; \
-             if [ -d \"\$TARGET\" ]; then \
-               rm -rf -- \"\$TARGET\"; \
-               echo 'Apagado: '\$TARGET; \
-             else \
-               echo 'Nada para apagar: '\$TARGET; \
-             fi"
