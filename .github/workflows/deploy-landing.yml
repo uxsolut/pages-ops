@@ -50,22 +50,22 @@ jobs:
           RAW_ID_EMPRESA="${{ github.event.inputs.id_empresa }}"
           ZIP_URL="${{ github.event.inputs.zip_url }}"
 
-          echo ">>> Inputs recebidos:"
+          echo ">>> Inputs:"
           echo "domain=${DOMAIN}"
           echo "raw_slug=${RAW_SLUG:-<vazio>}"
           echo "raw_id_empresa=${RAW_ID_EMPRESA:-<vazio>}"
           echo "zip_url=${ZIP_URL}"
 
-          # Normalizar slug (um nível apenas)
+          # Normalizar slug (um nível)
           SLUG="$(echo -n "${RAW_SLUG:-}" | sed 's#^/*##; s#/*$##')"
 
-          # Validar domínio
+          # Domínio válido
           case "$DOMAIN" in
             pinacle.com.br|gestordecapitais.com|tetramusic.com.br) ;;
             *) echo "Domínio inválido"; exit 1 ;;
           esac
 
-          # Regras de slug: "" | "beta" | "dev" | "beta/<slug>" | "dev/<slug>" | "<slug>"
+          # Slug: "" | "beta" | "dev" | "beta/<slug>" | "dev/<slug>" | "<slug>"
           re_slug='^$|^(beta|dev)$|^(beta|dev)/[a-z0-9-]{1,64}$|^[a-z0-9-]{1,64}$'
           if [[ ! "$SLUG" =~ $re_slug ]]; then
             echo "Slug inválido. Use vazio, 'beta', 'dev', 'beta/<slug>', 'dev/<slug>' ou '<slug>' (a-z0-9-, 1-64)."
@@ -73,57 +73,57 @@ jobs:
           fi
 
           # Derivar estado e folha
-          STATE=""   # "", "beta", "dev"
-          LEAF=""    # "", "<slug>"
+          STATE=""; LEAF=""
           if [[ "$SLUG" == "beta" || "$SLUG" == "dev" ]]; then
-            STATE="$SLUG"; LEAF=""
+            STATE="$SLUG"
           elif [[ "$SLUG" =~ ^(beta|dev)/.+$ ]]; then
             STATE="${SLUG%%/*}"; LEAF="${SLUG#*/}"
           elif [[ -n "$SLUG" ]]; then
-            STATE=""; LEAF="$SLUG"
+            LEAF="$SLUG"
           fi
+          echo "STATE=${STATE:-<vazio>}  LEAF=${LEAF:-<vazio>}"
 
-          echo ">>> Derivados:"
-          echo "STATE=${STATE:-<vazio>}"
-          echo "LEAF=${LEAF:-<vazio>}"
-
-          # Resolver empresa (opcional) -> EMPRESA_SLUG (minúsculo)
+          # -------- Empresa: buscar nome e gerar slug minúsculo --------
           EMPRESA_SLUG=""
-          if [[ -n "${RAW_ID_EMPRESA:-}" ]]; then
-            sudo apt-get update -y
-            sudo apt-get install -y postgresql-client
+          RAW_ID_EMPRESA_TRIM="$(echo -n "${RAW_ID_EMPRESA:-}" | tr -d '[:space:]')"
+          if [[ -n "${RAW_ID_EMPRESA_TRIM}" ]]; then
+            # validar numérico
+            if ! [[ "${RAW_ID_EMPRESA_TRIM}" =~ ^[0-9]+$ ]]; then
+              echo "id_empresa deve ser numérico. Recebido: '${RAW_ID_EMPRESA_TRIM}'"; exit 1
+            fi
+
             : "${PGPORT:=5432}"
+            sudo apt-get update -y
+            sudo apt-get install -y postgresql-client > /dev/null
 
             if [[ -z "${PGHOST:-}" || -z "${PGDATABASE:-}" || -z "${PGUSER:-}" || -z "${PGPASSWORD:-}" ]]; then
-              echo "Faltam secrets do Postgres (PGHOST, PGDATABASE, PGUSER, PGPASSWORD)."
-              exit 1
+              echo "Faltam secrets do Postgres (PGHOST, PGDATABASE, PGUSER, PGPASSWORD)."; exit 1
             fi
 
+            set -o pipefail
             NOME_EMPRESA="$(psql "host=$PGHOST port=$PGPORT dbname=$PGDATABASE user=$PGUSER password=$PGPASSWORD" \
-              -tA -c "SELECT nome FROM global.empresas WHERE id = ${RAW_ID_EMPRESA} LIMIT 1;")"
+              -tA -c "SELECT nome FROM global.empresas WHERE id = ${RAW_ID_EMPRESA_TRIM} LIMIT 1;" \
+              | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+            set +o pipefail
 
             echo "nome_empresa=${NOME_EMPRESA:-<nao_encontrado>}"
-
             if [[ -z "$NOME_EMPRESA" ]]; then
-              echo "Empresa id=${RAW_ID_EMPRESA} não encontrada."
-              exit 1
+              echo "Empresa id=${RAW_ID_EMPRESA_TRIM} não encontrada."; exit 1
             fi
 
+            # minúsculo + sem acento + somente [a-z0-9-]
             EMPRESA_SLUG="$(printf '%s' "$NOME_EMPRESA" \
-              | iconv -f UTF-8 -t ASCII//TRANSLIT 2>/dev/null \
+              | iconv -f UTF-8 -t ASCII//TRANSLIT 2>/dev/null || printf '%s' "$NOME_EMPRESA" \
               | tr '[:upper:]' '[:lower:]' \
               | sed -E 's/[^a-z0-9]+/-/g; s/-+/-/g; s/^-+//; s/-+$//' )"
 
             if [[ -z "$EMPRESA_SLUG" ]]; then
-              echo "Falha ao gerar slug da empresa a partir de \"$NOME_EMPRESA\"."
-              exit 1
+              echo "Falha ao gerar slug da empresa."; exit 1
             fi
           fi
-
           echo "empresa_slug=${EMPRESA_SLUG:-<vazio>}"
 
-          # ======== BASE_HREF (para build Flutter) — SEM /p ========
-          # Monta /<STATE?>/<EMPRESA_SLUG?>/<LEAF?>/
+          # ======== BASE_HREF e DEST_DIR ========
           parts=()
           [[ -n "$STATE" ]] && parts+=("$STATE")
           [[ -n "$EMPRESA_SLUG" ]] && parts+=("$EMPRESA_SLUG")
@@ -131,38 +131,38 @@ jobs:
 
           if [[ ${#parts[@]} -eq 0 ]]; then
             BASE_HREF="/"
+            FINAL_PATH="/"
           else
-            BASE_HREF="/$(IFS=/; echo "${parts[*]}")/"
+            JOINED="$(IFS=/; echo "${parts[*]}")"
+            BASE_HREF="/${JOINED}/"
+            FINAL_PATH="/${JOINED}/"
           fi
-          # =========================================================
 
-          # Diretório de destino no servidor
           DEST_DIR="/var/www/pages/${DOMAIN}"
-          if [[ ${#parts[@]} -gt 0 ]]; then
-            DEST_DIR="${DEST_DIR}/$(IFS=/; echo "${parts[*]}")"
-          fi
+          [[ ${#parts[@]} -gt 0 ]] && DEST_DIR="${DEST_DIR}${FINAL_PATH}"
 
           echo "BASE_HREF=${BASE_HREF}"
           echo "DEST_DIR=${DEST_DIR}"
+          echo "URL final: https://${DOMAIN}${FINAL_PATH}"
 
-          echo "domain=$DOMAIN"              >> "$GITHUB_OUTPUT"
-          echo "slug=$SLUG"                  >> "$GITHUB_OUTPUT"
-          echo "state=$STATE"                >> "$GITHUB_OUTPUT"
-          echo "leaf=$LEAF"                  >> "$GITHUB_OUTPUT"
-          echo "empresa_slug=$EMPRESA_SLUG"  >> "$GITHUB_OUTPUT"
-          echo "base_href=$BASE_HREF"        >> "$GITHUB_OUTPUT"
-          echo "dest_dir=$DEST_DIR"          >> "$GITHUB_OUTPUT"
-          echo "zip_url=$ZIP_URL"            >> "$GITHUB_OUTPUT"
+          # Outputs
+          {
+            echo "domain=$DOMAIN"
+            echo "slug=$SLUG"
+            echo "state=$STATE"
+            echo "leaf=$LEAF"
+            echo "empresa_slug=$EMPRESA_SLUG"
+            echo "base_href=$BASE_HREF"
+            echo "dest_dir=$DEST_DIR"
+            echo "zip_url=$ZIP_URL"
+          } >> "$GITHUB_OUTPUT"
 
-          # Preparar SSH (porta com fallback 22 via bash)
+          # SSH/host check
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          SSH_PORT="${{ secrets.SSH_PORT }}"
-          SSH_PORT="${SSH_PORT:-22}"
+          SSH_PORT="${{ secrets.SSH_PORT }}"; SSH_PORT="${SSH_PORT:-22}"
           ssh-keyscan -p "$SSH_PORT" -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
-
-          # Verificar domínio no servidor
           ssh -i ~/.ssh/id_rsa -p "$SSH_PORT" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
             "[ -d /var/www/pages/${DOMAIN} ] || { echo 'Domínio não preparado no servidor'; exit 1; }"
 
@@ -217,16 +217,14 @@ jobs:
 
       - name: Criar diretório destino
         run: |
-          SSH_PORT="${{ secrets.SSH_PORT }}"
-          SSH_PORT="${SSH_PORT:-22}"
+          SSH_PORT="${{ secrets.SSH_PORT }}"; SSH_PORT="${SSH_PORT:-22}"
           ssh -i ~/.ssh/id_rsa -p "$SSH_PORT" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
             "mkdir -p '${{ steps.derive.outputs.dest_dir }}'"
 
       - name: Limpar homepage (prod sem estado/empresa/slug)
         if: ${{ steps.derive.outputs.state == '' && steps.derive.outputs.leaf == '' && steps.derive.outputs.empresa_slug == '' }}
         run: |
-          SSH_PORT="${{ secrets.SSH_PORT }}"
-          SSH_PORT="${SSH_PORT:-22}"
+          SSH_PORT="${{ secrets.SSH_PORT }}"; SSH_PORT="${SSH_PORT:-22}"
           ssh -i ~/.ssh/id_rsa -p "$SSH_PORT" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
             "set -euo pipefail; \
              DEST='${{ steps.derive.outputs.dest_dir }}'; \
@@ -248,8 +246,7 @@ jobs:
 
       - name: Rsync para o servidor
         run: |
-          SSH_PORT="${{ secrets.SSH_PORT }}"
-          SSH_PORT="${SSH_PORT:-22}"
+          SSH_PORT="${{ secrets.SSH_PORT }}"; SSH_PORT="${SSH_PORT:-22}"
           RSYNC_DELETE="--delete"
           if [[ -z "${{ steps.derive.outputs.state }}" && -z "${{ steps.derive.outputs.leaf }}" && -z "${{ steps.derive.outputs.empresa_slug }}" ]]; then
             RSYNC_DELETE=""
@@ -261,8 +258,7 @@ jobs:
 
       - name: Gravar version.txt no destino
         run: |
-          SSH_PORT="${{ secrets.SSH_PORT }}"
-          SSH_PORT="${SSH_PORT:-22}"
+          SSH_PORT="${{ secrets.SSH_PORT }}"; SSH_PORT="${SSH_PORT:-22}"
           ssh -i ~/.ssh/id_rsa -p "$SSH_PORT" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
             "printf 'domain=%s\nslug=%s\nempresa_slug=%s\nzip_url=%s\ncommit=%s\nrun_id=%s\ndate=%s\nbase_href=%s\n' \
              '${{ steps.derive.outputs.domain }}' '${{ steps.derive.outputs.slug }}' '${{ steps.derive.outputs.empresa_slug }}' \
