@@ -50,29 +50,18 @@ jobs:
           RAW_ID_EMPRESA="${{ github.event.inputs.id_empresa }}"
           ZIP_URL="${{ github.event.inputs.zip_url }}"
 
-          echo ">>> Inputs:"
-          echo "domain=${DOMAIN}"
-          echo "raw_slug=${RAW_SLUG:-<vazio>}"
-          echo "raw_id_empresa=${RAW_ID_EMPRESA:-<vazio>}"
-          echo "zip_url=${ZIP_URL}"
-
-          # Normalizar slug (um nível)
+          # -- slug (1 nível) e domínio --
           SLUG="$(echo -n "${RAW_SLUG:-}" | sed 's#^/*##; s#/*$##')"
-
-          # Domínio válido
           case "$DOMAIN" in
             pinacle.com.br|gestordecapitais.com|tetramusic.com.br) ;;
             *) echo "Domínio inválido"; exit 1 ;;
           esac
-
-          # Slug: "" | "beta" | "dev" | "beta/<slug>" | "dev/<slug>" | "<slug>"
           re_slug='^$|^(beta|dev)$|^(beta|dev)/[a-z0-9-]{1,64}$|^[a-z0-9-]{1,64}$'
           if [[ ! "$SLUG" =~ $re_slug ]]; then
-            echo "Slug inválido. Use vazio, 'beta', 'dev', 'beta/<slug>', 'dev/<slug>' ou '<slug>' (a-z0-9-, 1-64)."
-            exit 1
+            echo "Slug inválido."; exit 1
           fi
 
-          # Derivar estado e folha
+          # -- derivar estado/folha --
           STATE=""; LEAF=""
           if [[ "$SLUG" == "beta" || "$SLUG" == "dev" ]]; then
             STATE="$SLUG"
@@ -81,81 +70,58 @@ jobs:
           elif [[ -n "$SLUG" ]]; then
             LEAF="$SLUG"
           fi
-          echo "STATE=${STATE:-<vazio>}  LEAF=${LEAF:-<vazio>}"
 
-          # -------- Empresa: buscar nome e gerar slug minúsculo --------
-          EMPRESA_SLUG=""
+          # -- empresa: **mesmo tratamento do estado** (apenas lower(nome)) --
+          EMPRESA_SEG=""
           RAW_ID_EMPRESA_TRIM="$(echo -n "${RAW_ID_EMPRESA:-}" | tr -d '[:space:]')"
-          if [[ -n "${RAW_ID_EMPRESA_TRIM}" ]]; then
-            # validar numérico
-            if ! [[ "${RAW_ID_EMPRESA_TRIM}" =~ ^[0-9]+$ ]]; then
-              echo "id_empresa deve ser numérico. Recebido: '${RAW_ID_EMPRESA_TRIM}'"; exit 1
-            fi
+          if [[ -n "$RAW_ID_EMPRESA_TRIM" ]]; then
+            # precisa ser numérico
+            [[ "$RAW_ID_EMPRESA_TRIM" =~ ^[0-9]+$ ]] || { echo "id_empresa deve ser numérico"; exit 1; }
 
             : "${PGPORT:=5432}"
             sudo apt-get update -y
             sudo apt-get install -y postgresql-client > /dev/null
 
-            if [[ -z "${PGHOST:-}" || -z "${PGDATABASE:-}" || -z "${PGUSER:-}" || -z "${PGPASSWORD:-}" ]]; then
-              echo "Faltam secrets do Postgres (PGHOST, PGDATABASE, PGUSER, PGPASSWORD)."; exit 1
-            fi
+            [[ -n "${PGHOST:-}" && -n "${PGDATABASE:-}" && -n "${PGUSER:-}" && -n "${PGPASSWORD:-}" ]] \
+              || { echo "Faltam secrets do Postgres (PG*)."; exit 1; }
 
-            set -o pipefail
-            NOME_EMPRESA="$(psql "host=$PGHOST port=$PGPORT dbname=$PGDATABASE user=$PGUSER password=$PGPASSWORD" \
-              -tA -c "SELECT nome FROM global.empresas WHERE id = ${RAW_ID_EMPRESA_TRIM} LIMIT 1;" \
+            # pega o nome **minúsculo** exatamente como no banco (sem slugify)
+            EMPRESA_SEG="$(psql "host=$PGHOST port=$PGPORT dbname=$PGDATABASE user=$PGUSER password=$PGPASSWORD" \
+              -tA -c "SELECT lower(nome) FROM global.empresas WHERE id = ${RAW_ID_EMPRESA_TRIM} LIMIT 1;" \
               | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
-            set +o pipefail
 
-            echo "nome_empresa=${NOME_EMPRESA:-<nao_encontrado>}"
-            if [[ -z "$NOME_EMPRESA" ]]; then
-              echo "Empresa id=${RAW_ID_EMPRESA_TRIM} não encontrada."; exit 1
-            fi
-
-            # minúsculo + sem acento + somente [a-z0-9-]
-            EMPRESA_SLUG="$(printf '%s' "$NOME_EMPRESA" \
-              | iconv -f UTF-8 -t ASCII//TRANSLIT 2>/dev/null || printf '%s' "$NOME_EMPRESA" \
-              | tr '[:upper:]' '[:lower:]' \
-              | sed -E 's/[^a-z0-9]+/-/g; s/-+/-/g; s/^-+//; s/-+$//' )"
-
-            if [[ -z "$EMPRESA_SLUG" ]]; then
-              echo "Falha ao gerar slug da empresa."; exit 1
-            fi
+            [[ -n "$EMPRESA_SEG" ]] || { echo "Empresa id=${RAW_ID_EMPRESA_TRIM} não encontrada."; exit 1; }
           fi
-          echo "empresa_slug=${EMPRESA_SLUG:-<vazio>}"
 
-          # ======== BASE_HREF e DEST_DIR ========
+          # -- montar caminho final: /<estado?>/<empresa?>/<slug?>/ --
           parts=()
           [[ -n "$STATE" ]] && parts+=("$STATE")
-          [[ -n "$EMPRESA_SLUG" ]] && parts+=("$EMPRESA_SLUG")
+          [[ -n "$EMPRESA_SEG" ]] && parts+=("$EMPRESA_SEG")
           [[ -n "$LEAF" ]] && parts+=("$LEAF")
 
           if [[ ${#parts[@]} -eq 0 ]]; then
-            BASE_HREF="/"
-            FINAL_PATH="/"
+            BASE_HREF="/"; FINAL_PATH="/"
           else
             JOINED="$(IFS=/; echo "${parts[*]}")"
-            BASE_HREF="/${JOINED}/"
-            FINAL_PATH="/${JOINED}/"
+            BASE_HREF="/${JOINED}/"; FINAL_PATH="/${JOINED}/"
+          fi
+
+          # se id_empresa foi enviado, Garante que entrou no caminho
+          if [[ -n "$RAW_ID_EMPRESA_TRIM" && "${FINAL_PATH}" != */${EMPRESA_SEG}/* && "${FINAL_PATH}" != */${EMPRESA_SEG}/ ]]; then
+            echo "id_empresa informado, mas '/${EMPRESA_SEG}/' não entrou no caminho: ${FINAL_PATH}"; exit 1
           fi
 
           DEST_DIR="/var/www/pages/${DOMAIN}"
           [[ ${#parts[@]} -gt 0 ]] && DEST_DIR="${DEST_DIR}${FINAL_PATH}"
 
-          echo "BASE_HREF=${BASE_HREF}"
-          echo "DEST_DIR=${DEST_DIR}"
-          echo "URL final: https://${DOMAIN}${FINAL_PATH}"
-
-          # Outputs
-          {
-            echo "domain=$DOMAIN"
-            echo "slug=$SLUG"
-            echo "state=$STATE"
-            echo "leaf=$LEAF"
-            echo "empresa_slug=$EMPRESA_SLUG"
-            echo "base_href=$BASE_HREF"
-            echo "dest_dir=$DEST_DIR"
-            echo "zip_url=$ZIP_URL"
-          } >> "$GITHUB_OUTPUT"
+          echo "domain=$DOMAIN"            >> "$GITHUB_OUTPUT"
+          echo "slug=$SLUG"                >> "$GITHUB_OUTPUT"
+          echo "state=$STATE"              >> "$GITHUB_OUTPUT"
+          echo "leaf=$LEAF"                >> "$GITHUB_OUTPUT"
+          echo "empresa_slug=$EMPRESA_SEG" >> "$GITHUB_OUTPUT"
+          echo "base_href=$BASE_HREF"      >> "$GITHUB_OUTPUT"
+          echo "dest_dir=$DEST_DIR"        >> "$GITHUB_OUTPUT"
+          echo "zip_url=$ZIP_URL"          >> "$GITHUB_OUTPUT"
 
           # SSH/host check
           mkdir -p ~/.ssh
