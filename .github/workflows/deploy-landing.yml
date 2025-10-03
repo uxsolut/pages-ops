@@ -11,8 +11,11 @@ on:
       slug:
         description: 'Slug (vazio, "beta", "dev", "beta/slug", "dev/slug" ou "slug")'
         required: false
+      empresa:
+        description: 'Nome da empresa já em minúsculo (opcional)'
+        required: false
       id_empresa:
-        description: 'ID da empresa (opcional; inclui o nome da empresa na URL)'
+        description: 'ID da empresa (opcional; auditoria)'
         required: false
       zip_url:
         description: 'URL pública do ZIP do Flutter (com pubspec.yaml na raiz)'
@@ -36,32 +39,37 @@ jobs:
       - name: Validar inputs e preparar ambiente
         id: derive
         shell: bash
-        env:
-          PGHOST:     ${{ secrets.PGHOST }}
-          PGPORT:     ${{ secrets.PGPORT }}
-          PGDATABASE: ${{ secrets.PGDATABASE }}
-          PGUSER:     ${{ secrets.PGUSER }}
-          PGPASSWORD: ${{ secrets.PGPASSWORD }}
         run: |
           set -euo pipefail
 
           DOMAIN="${{ github.event.inputs.domain }}"
           RAW_SLUG="${{ github.event.inputs.slug }}"
+          RAW_EMPRESA="${{ github.event.inputs.empresa }}"
           RAW_ID_EMPRESA="${{ github.event.inputs.id_empresa }}"
           ZIP_URL="${{ github.event.inputs.zip_url }}"
 
-          # -- slug (1 nível) e domínio --
-          SLUG="$(echo -n "${RAW_SLUG:-}" | sed 's#^/*##; s#/*$##')"
+          echo ">>> Inputs:"
+          echo "  domain=${DOMAIN}"
+          echo "  raw_slug=${RAW_SLUG:-<vazio>}"
+          echo "  raw_empresa=${RAW_EMPRESA:-<vazio>}"
+          echo "  raw_id_empresa=${RAW_ID_EMPRESA:-<vazio>}"
+          echo "  zip_url=${ZIP_URL}"
+
+          # -------- validar dominio --------
           case "$DOMAIN" in
             pinacle.com.br|gestordecapitais.com|tetramusic.com.br) ;;
             *) echo "Domínio inválido"; exit 1 ;;
           esac
+
+          # -------- normalizar slug (1 nível após estado) --------
+          SLUG="$(echo -n "${RAW_SLUG:-}" | sed 's#^/*##; s#/*$##')"
           re_slug='^$|^(beta|dev)$|^(beta|dev)/[a-z0-9-]{1,64}$|^[a-z0-9-]{1,64}$'
           if [[ ! "$SLUG" =~ $re_slug ]]; then
-            echo "Slug inválido."; exit 1
+            echo "Slug inválido. Use vazio, 'beta', 'dev', 'beta/<slug>', 'dev/<slug>' ou '<slug>' (a-z0-9-, 1-64)."
+            exit 1
           fi
 
-          # -- derivar estado/folha --
+          # -------- derivar estado (STATE) e folha (LEAF) --------
           STATE=""; LEAF=""
           if [[ "$SLUG" == "beta" || "$SLUG" == "dev" ]]; then
             STATE="$SLUG"
@@ -71,59 +79,44 @@ jobs:
             LEAF="$SLUG"
           fi
 
-          # -- empresa: **mesmo tratamento do estado** (apenas lower(nome)) --
-          EMPRESA_SEG=""
-          RAW_ID_EMPRESA_TRIM="$(echo -n "${RAW_ID_EMPRESA:-}" | tr -d '[:space:]')"
-          if [[ -n "$RAW_ID_EMPRESA_TRIM" ]]; then
-            # precisa ser numérico
-            [[ "$RAW_ID_EMPRESA_TRIM" =~ ^[0-9]+$ ]] || { echo "id_empresa deve ser numérico"; exit 1; }
-
-            : "${PGPORT:=5432}"
-            sudo apt-get update -y
-            sudo apt-get install -y postgresql-client > /dev/null
-
-            [[ -n "${PGHOST:-}" && -n "${PGDATABASE:-}" && -n "${PGUSER:-}" && -n "${PGPASSWORD:-}" ]] \
-              || { echo "Faltam secrets do Postgres (PG*)."; exit 1; }
-
-            # pega o nome **minúsculo** exatamente como no banco (sem slugify)
-            EMPRESA_SEG="$(psql "host=$PGHOST port=$PGPORT dbname=$PGDATABASE user=$PGUSER password=$PGPASSWORD" \
-              -tA -c "SELECT lower(nome) FROM global.empresas WHERE id = ${RAW_ID_EMPRESA_TRIM} LIMIT 1;" \
-              | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
-
-            [[ -n "$EMPRESA_SEG" ]] || { echo "Empresa id=${RAW_ID_EMPRESA_TRIM} não encontrada."; exit 1; }
+          # -------- empresa (já deveria vir minúscula do backend) --------
+          # regra leve: lowercase + trim + espaços internos -> '-' (evita path feio)
+          EMPRESA_SLUG=""
+          if [[ -n "${RAW_EMPRESA:-}" ]]; then
+            EMPRESA_SLUG="$(echo -n "$RAW_EMPRESA" \
+              | tr '[:upper:]' '[:lower:]' \
+              | sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s/[[:space:]]+/-/g')"
+            # não forçar regex dura aqui; backend já envia normalizado
           fi
 
-          # -- montar caminho final: /<estado?>/<empresa?>/<slug?>/ --
+          # -------- montar base_href e dest_dir --------
           parts=()
           [[ -n "$STATE" ]] && parts+=("$STATE")
-          [[ -n "$EMPRESA_SEG" ]] && parts+=("$EMPRESA_SEG")
+          [[ -n "$EMPRESA_SLUG" ]] && parts+=("$EMPRESA_SLUG")
           [[ -n "$LEAF" ]] && parts+=("$LEAF")
 
           if [[ ${#parts[@]} -eq 0 ]]; then
-            BASE_HREF="/"; FINAL_PATH="/"
+            BASE_HREF="/"
+            FINAL_PATH="/"
           else
             JOINED="$(IFS=/; echo "${parts[*]}")"
-            BASE_HREF="/${JOINED}/"; FINAL_PATH="/${JOINED}/"
-          fi
-
-          # se id_empresa foi enviado, Garante que entrou no caminho
-          if [[ -n "$RAW_ID_EMPRESA_TRIM" && "${FINAL_PATH}" != */${EMPRESA_SEG}/* && "${FINAL_PATH}" != */${EMPRESA_SEG}/ ]]; then
-            echo "id_empresa informado, mas '/${EMPRESA_SEG}/' não entrou no caminho: ${FINAL_PATH}"; exit 1
+            BASE_HREF="/${JOINED}/"
+            FINAL_PATH="/${JOINED}/"
           fi
 
           DEST_DIR="/var/www/pages/${DOMAIN}"
-          [[ ${#parts[@]} -gt 0 ]] && DEST_DIR="${DEST_DIR}${FINAL_PATH}"
+          if [[ ${#parts[@]} -gt 0 ]]; then
+            DEST_DIR="${DEST_DIR}${FINAL_PATH}"
+          fi
 
-          echo "domain=$DOMAIN"            >> "$GITHUB_OUTPUT"
-          echo "slug=$SLUG"                >> "$GITHUB_OUTPUT"
-          echo "state=$STATE"              >> "$GITHUB_OUTPUT"
-          echo "leaf=$LEAF"                >> "$GITHUB_OUTPUT"
-          echo "empresa_slug=$EMPRESA_SEG" >> "$GITHUB_OUTPUT"
-          echo "base_href=$BASE_HREF"      >> "$GITHUB_OUTPUT"
-          echo "dest_dir=$DEST_DIR"        >> "$GITHUB_OUTPUT"
-          echo "zip_url=$ZIP_URL"          >> "$GITHUB_OUTPUT"
+          echo ">>> Derivados:"
+          echo "  STATE=${STATE:-<vazio>}"
+          echo "  LEAF=${LEAF:-<vazio>}"
+          echo "  EMPRESA_SLUG=${EMPRESA_SLUG:-<vazio>}"
+          echo "  BASE_HREF=${BASE_HREF}"
+          echo "  DEST_DIR=${DEST_DIR}"
 
-          # SSH/host check
+          # -------- SSH / verificação do domínio no host --------
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
@@ -131,6 +124,16 @@ jobs:
           ssh-keyscan -p "$SSH_PORT" -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
           ssh -i ~/.ssh/id_rsa -p "$SSH_PORT" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
             "[ -d /var/www/pages/${DOMAIN} ] || { echo 'Domínio não preparado no servidor'; exit 1; }"
+
+          # -------- exportar para os próximos steps --------
+          echo "domain=$DOMAIN"              >> "$GITHUB_OUTPUT"
+          echo "slug=$SLUG"                  >> "$GITHUB_OUTPUT"
+          echo "state=$STATE"                >> "$GITHUB_OUTPUT"
+          echo "leaf=$LEAF"                  >> "$GITHUB_OUTPUT"
+          echo "empresa_slug=$EMPRESA_SLUG"  >> "$GITHUB_OUTPUT"
+          echo "base_href=$BASE_HREF"        >> "$GITHUB_OUTPUT"
+          echo "dest_dir=$DEST_DIR"          >> "$GITHUB_OUTPUT"
+          echo "zip_url=$ZIP_URL"            >> "$GITHUB_OUTPUT"
 
       - name: Baixar ZIP do Flutter
         run: |
