@@ -94,7 +94,7 @@ jobs:
             LEAF="$SLUG"
           fi
 
-          # -------- empresa (já deveria vir normalizada do backend) --------
+          # -------- empresa (já normalizada pelo backend) --------
           EMPRESA_SLUG=""
           if [[ -n "${RAW_EMPRESA:-}" ]]; then
             EMPRESA_SLUG="$(echo -n "$RAW_EMPRESA" \
@@ -136,19 +136,21 @@ jobs:
           SSH_PORT="${{ secrets.SSH_PORT }}"; SSH_PORT="${SSH_PORT:-22}"
           ssh-keyscan -p "$SSH_PORT" -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
           ssh -i ~/.ssh/id_rsa -p "$SSH_PORT" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-            "[ -d /var/www/pages/${DOMAIN} ] || { echo 'Domínio não preparado no servidor' | tee -a ~/deploy.log; exit 1; }"
+            "[ -d /var/www/pages/${DOMAIN} ] || { echo 'Domínio não preparado no servidor' ; exit 1; }" | tee -a deploy.log
 
           # -------- exportar para os próximos steps --------
-          echo "domain=$DOMAIN"              >> "$GITHUB_OUTPUT"
-          echo "slug=$SLUG"                  >> "$GITHUB_OUTPUT"
-          echo "state=$STATE"                >> "$GITHUB_OUTPUT"
-          echo "leaf=$LEAF"                  >> "$GITHUB_OUTPUT"
-          echo "empresa_slug=$EMPRESA_SLUG"  >> "$GITHUB_OUTPUT"
-          echo "base_href=$BASE_HREF"        >> "$GITHUB_OUTPUT"
-          echo "dest_dir=$DEST_DIR"          >> "$GITHUB_OUTPUT"
-          echo "zip_url=${ZIP_URL}"          >> "$GITHUB_OUTPUT"
-          echo "aplicacao_id=${APLICACAO_ID}" >> "$GITHUB_OUTPUT"
-          echo "api_base=${API_BASE}"        >> "$GITHUB_OUTPUT"
+          {
+            echo "domain=$DOMAIN"
+            echo "slug=$SLUG"
+            echo "state=$STATE"
+            echo "leaf=$LEAF"
+            echo "empresa_slug=$EMPRESA_SLUG"
+            echo "base_href=$BASE_HREF"
+            echo "dest_dir=$DEST_DIR"
+            echo "zip_url=${ZIP_URL}"
+            echo "aplicacao_id=${APLICACAO_ID}"
+            echo "api_base=${API_BASE}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Baixar ZIP do Flutter
         run: |
@@ -270,13 +272,13 @@ jobs:
           API_TOKEN: ${{ secrets.API_TOKEN_DEPLOY }}
         run: |
           set -euo pipefail
-          AUTH=""
+          AUTH_ARGS=()
           if [[ -n "${API_TOKEN:-}" ]]; then
-            AUTH="-H Authorization: Bearer ${API_TOKEN}"
+            AUTH_ARGS=(-H "Authorization: Bearer ${API_TOKEN}")
           fi
           curl -sS -X PUT \
             -H "Content-Type: application/json" \
-            ${AUTH} \
+            "${AUTH_ARGS[@]}" \
             "${API_BASE}/status-aplicacao/${APLICACAO_ID}" \
             --data '{"status":"concluído"}'
 
@@ -289,15 +291,14 @@ jobs:
         run: |
           set -euo pipefail
           ERR_SUMMARY="$(tail -n 200 deploy.log | sed 's/\\/\\\\/g; s/"/\\"/g')"
-          AUTH=""
+          AUTH_ARGS=()
           if [[ -n "${API_TOKEN:-}" ]]; then
-            AUTH="-H Authorization: Bearer ${API_TOKEN}"
+            AUTH_ARGS=(-H "Authorization: Bearer ${API_TOKEN}")
           fi
-          # usar jq se disponível; se não, montar JSON manualmente
           JSON_PAYLOAD="{\"status\":\"falhou\",\"resumo_do_erro\":\"${ERR_SUMMARY}\"}"
           curl -sS -X PUT \
             -H "Content-Type: application/json" \
-            ${AUTH} \
+            "${AUTH_ARGS[@]}" \
             "${API_BASE}/status-aplicacao/${APLICACAO_ID}" \
             --data "${JSON_PAYLOAD}"
 
@@ -309,12 +310,12 @@ jobs:
           API_TOKEN: ${{ secrets.API_TOKEN_DEPLOY }}
         run: |
           set -euo pipefail
-          AUTH=""
+          AUTH_ARGS=()
           if [[ -n "${API_TOKEN:-}" ]]; then
-            AUTH="-H Authorization: Bearer ${API_TOKEN}"
+            AUTH_ARGS=(-H "Authorization: Bearer ${API_TOKEN}")
           fi
           curl -sS -X PUT \
             -H "Content-Type: application/json" \
-            ${AUTH} \
+            "${AUTH_ARGS[@]}" \
             "${API_BASE}/status-aplicacao/${APLICACAO_ID}" \
             --data '{"status":"cancelado"}'
