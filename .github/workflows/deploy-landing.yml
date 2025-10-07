@@ -24,9 +24,9 @@ on:
         description: 'ID da aplicação no banco (para PUT de status)'
         required: true
       api_base:
-        description: 'URL base da API (ex: https://gestordecapitais.com ou http://IP:PORT/api)'
+        description: 'URL base da API (ex: https://gestordecapitais.com/api ou http://IP:PORT/api)'
         required: false
-        default: 'https://gestordecapitais.com'
+        default: 'https://gestordecapitais.com/api'
 
 permissions:
   contents: write
@@ -70,13 +70,11 @@ jobs:
           echo "  aplicacao_id=${APLICACAO_ID}" | tee -a deploy.log
           echo "  api_base=${API_BASE}" | tee -a deploy.log
 
-          # -------- validar dominio --------
           case "$DOMAIN" in
             pinacle.com.br|gestordecapitais.com|tetramusic.com.br) ;;
             *) echo "Domínio inválido" | tee -a deploy.log; exit 1 ;;
           esac
 
-          # -------- normalizar slug --------
           SLUG="$(echo -n "${RAW_SLUG:-}" | sed 's#^/*##; s#/*$##')"
           re_slug='^$|^(beta|dev)$|^(beta|dev)/[a-z0-9-]{1,64}$|^[a-z0-9-]{1,64}$'
           if [[ ! "$SLUG" =~ $re_slug ]]; then
@@ -84,7 +82,6 @@ jobs:
             exit 1
           fi
 
-          # -------- derivar estado (STATE) e folha (LEAF) --------
           STATE=""; LEAF=""
           if [[ "$SLUG" == "beta" || "$SLUG" == "dev" ]]; then
             STATE="$SLUG"
@@ -94,7 +91,6 @@ jobs:
             LEAF="$SLUG"
           fi
 
-          # -------- empresa (já normalizada pelo backend) --------
           EMPRESA_SLUG=""
           if [[ -n "${RAW_EMPRESA:-}" ]]; then
             EMPRESA_SLUG="$(echo -n "$RAW_EMPRESA" \
@@ -102,19 +98,16 @@ jobs:
               | sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s/[[:space:]]+/-/g')"
           fi
 
-          # -------- montar base_href e dest_dir --------
           parts=()
           [[ -n "$STATE" ]] && parts+=("$STATE")
           [[ -n "$EMPRESA_SLUG" ]] && parts+=("$EMPRESA_SLUG")
           [[ -n "$LEAF" ]] && parts+=("$LEAF")
 
           if [[ ${#parts[@]} -eq 0 ]]; then
-            BASE_HREF="/"
-            FINAL_PATH="/"
+            BASE_HREF="/"; FINAL_PATH="/"
           else
             JOINED="$(IFS=/; echo "${parts[*]}")"
-            BASE_HREF="/${JOINED}/"
-            FINAL_PATH="/${JOINED}/"
+            BASE_HREF="/${JOINED}/"; FINAL_PATH="/${JOINED}/"
           fi
 
           DEST_DIR="/var/www/pages/${DOMAIN}"
@@ -129,7 +122,6 @@ jobs:
           echo "  BASE_HREF=${BASE_HREF}" | tee -a deploy.log
           echo "  DEST_DIR=${DEST_DIR}" | tee -a deploy.log
 
-          # -------- SSH / verificação do domínio no host --------
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
@@ -138,7 +130,6 @@ jobs:
           ssh -i ~/.ssh/id_rsa -p "$SSH_PORT" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
             "[ -d /var/www/pages/${DOMAIN} ] || { echo 'Domínio não preparado no servidor' ; exit 1; }" | tee -a deploy.log
 
-          # -------- exportar para os próximos steps --------
           {
             echo "domain=$DOMAIN"
             echo "slug=$SLUG"
@@ -263,7 +254,7 @@ jobs:
              '${{ steps.derive.outputs.base_href }}' \
              > '${{ steps.derive.outputs.dest_dir }}/version.txt'" 2>&1 | tee -a deploy.log
 
-      # ===================== PUT DE STATUS =====================
+      # ===================== PUT DE STATUS (com /api e json completo) =====================
       - name: Marcar CONCLUÍDO na API
         if: success()
         env:
@@ -281,7 +272,7 @@ jobs:
             -H "Content-Type: application/json" \
             "${AUTH_ARGS[@]}" \
             "${API_BASE}/status-aplicacao/${APLICACAO_ID}" \
-            --data '{"status":"concluído"}' \
+            --data '{"status":"concluído","resumo_do_erro":null}' \
             | tee -a deploy.log
           echo >> deploy.log
 
@@ -326,6 +317,6 @@ jobs:
             -H "Content-Type: application/json" \
             "${AUTH_ARGS[@]}" \
             "${API_BASE}/status-aplicacao/${APLICACAO_ID}" \
-            --data '{"status":"cancelado"}' \
+            --data '{"status":"cancelado","resumo_do_erro":null}' \
             | tee -a deploy.log
           echo >> deploy.log
