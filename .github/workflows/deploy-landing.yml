@@ -60,10 +60,8 @@ jobs:
           APLICACAO_ID="${{ github.event.inputs.aplicacao_id }}"
           API_BASE="${{ github.event.inputs.api_base }}"
 
-          # Normalizar api_base: exigir valor e remover barra final
           if [[ -z "${API_BASE:-}" ]]; then
-            echo "api_base é obrigatório (ex.: http://178.156.182.205/api)" | tee -a deploy.log
-            exit 1
+            echo "api_base é obrigatório (ex.: http://178.156.182.205/api)" | tee -a deploy.log; exit 1
           fi
           API_BASE="${API_BASE%/}"
 
@@ -99,9 +97,7 @@ jobs:
 
           EMPRESA_SLUG=""
           if [[ -n "${RAW_EMPRESA:-}" ]]; then
-            EMPRESA_SLUG="$(echo -n "$RAW_EMPRESA" \
-              | tr '[:upper:]' '[:lower:]' \
-              | sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s/[[:space:]]+/-/g')"
+            EMPRESA_SLUG="$(echo -n "$RAW_EMPRESA" | tr '[:upper:]' '[:lower:]' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s/[[:space:]]+/-/g')"
           fi
 
           parts=()
@@ -117,9 +113,7 @@ jobs:
           fi
 
           DEST_DIR="/var/www/pages/${DOMAIN}"
-          if [[ ${#parts[@]} -gt 0 ]]; then
-            DEST_DIR="${DEST_DIR}${FINAL_PATH}"
-          fi
+          if [[ ${#parts[@]} -gt 0 ]]; then DEST_DIR="${DEST_DIR}${FINAL_PATH}"; fi
 
           echo ">>> Derivados:" | tee -a deploy.log
           echo "  STATE=${STATE:-<vazio>}" | tee -a deploy.log
@@ -197,19 +191,16 @@ jobs:
           flutter clean 2>&1 | tee -a ../deploy.log
           flutter config --enable-web 2>&1 | tee -a ../deploy.log
           if flutter build web -h | grep -q -- '--web-renderer'; then
-            flutter build web --release --web-renderer canvaskit \
-              --base-href "${{ steps.derive.outputs.base_href }}" 2>&1 | tee -a ../deploy.log
+            flutter build web --release --web-renderer canvaskit --base-href "${{ steps.derive.outputs.base_href }}" 2>&1 | tee -a ../deploy.log
           else
-            flutter build web --release \
-              --base-href "${{ steps.derive.outputs.base_href }}" 2>&1 | tee -a ../deploy.log
+            flutter build web --release --base-href "${{ steps.derive.outputs.base_href }}" 2>&1 | tee -a ../deploy.log
           fi
 
       - name: Criar diretório destino
         run: |
           set -euo pipefail
           SSH_PORT="${{ secrets.SSH_PORT }}"; SSH_PORT="${SSH_PORT:-22}"
-          ssh -i ~/.ssh/id_rsa -p "$SSH_PORT" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-            "mkdir -p '${{ steps.derive.outputs.dest_dir }}'" 2>&1 | tee -a deploy.log
+          ssh -i ~/.ssh/id_rsa -p "$SSH_PORT" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "mkdir -p '${{ steps.derive.outputs.dest_dir }}'" 2>&1 | tee -a deploy.log
 
       - name: Limpar homepage (prod sem estado/empresa/slug)
         if: ${{ steps.derive.outputs.state == '' && steps.derive.outputs.leaf == '' && steps.derive.outputs.empresa_slug == '' }}
@@ -217,36 +208,22 @@ jobs:
           set -euo pipefail
           SSH_PORT="${{ secrets.SSH_PORT }}"; SSH_PORT="${SSH_PORT:-22}"
           ssh -i ~/.ssh/id_rsa -p "$SSH_PORT" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-            "set -euo pipefail; \
-             DEST='${{ steps.derive.outputs.dest_dir }}'; \
-             rm -f  \"\$DEST/index.html\" \
-                    \"\$DEST/favicon.png\" \
-                    \"\$DEST/favicon.ico\" \
-                    \"\$DEST/manifest.json\" \
-                    \"\$DEST/manifest.webmanifest\" \
-                    \"\$DEST/flutter.js\" \
-                    \"\$DEST/flutter_service_worker.js\" \
-                    \"\$DEST/version.txt\" \
-                    \"\$DEST/assets/AssetManifest.json\" \
+            "set -euo pipefail; DEST='${{ steps.derive.outputs.dest_dir }}'; \
+             rm -f  \"\$DEST/index.html\" \"\$DEST/favicon.png\" \"\$DEST/favicon.ico\" \
+                    \"\$DEST/manifest.json\" \"\$DEST/manifest.webmanifest\" \
+                    \"\$DEST/flutter.js\" \"\$DEST/flutter_service_worker.js\" \
+                    \"\$DEST/version.txt\" \"\$DEST/assets/AssetManifest.json\" \
                     \"\$DEST/assets/FontManifest.json\" || true; \
-             rm -rf \"\$DEST/assets\" \
-                    \"\$DEST/icons\" \
-                    \"\$DEST/fonts\" \
-                    \"\$DEST/canvaskit\" \
-                    \"\$DEST/_flutter\" || true" 2>&1 | tee -a deploy.log
+             rm -rf \"\$DEST/assets\" \"\$DEST/icons\" \"\$DEST/fonts\" \
+                    \"\$DEST/canvaskit\" \"\$DEST/_flutter\" || true" 2>&1 | tee -a deploy.log
 
       - name: Rsync para o servidor
         run: |
           set -euo pipefail
           SSH_PORT="${{ secrets.SSH_PORT }}"; SSH_PORT="${SSH_PORT:-22}"
           RSYNC_DELETE="--delete"
-          if [[ -z "${{ steps.derive.outputs.state }}" && -z "${{ steps.derive.outputs.leaf }}" && -z "${{ steps.derive.outputs.empresa_slug }}" ]]; then
-            RSYNC_DELETE=""
-          fi
-          rsync -avzr ${RSYNC_DELETE} \
-            -e "ssh -i ~/.ssh/id_rsa -p $SSH_PORT" \
-            _src/build/web/ \
-            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:"${{ steps.derive.outputs.dest_dir }}/" 2>&1 | tee -a deploy.log
+          if [[ -z "${{ steps.derive.outputs.state }}" && -z "${{ steps.derive.outputs.leaf }}" && -z "${{ steps.derive.outputs.empresa_slug }}" ]]; then RSYNC_DELETE=""; fi
+          rsync -avzr ${RSYNC_DELETE} -e "ssh -i ~/.ssh/id_rsa -p $SSH_PORT" _src/build/web/ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:"${{ steps.derive.outputs.dest_dir }}/" 2>&1 | tee -a deploy.log
 
       - name: Gravar version.txt no destino
         run: |
@@ -255,10 +232,8 @@ jobs:
           ssh -i ~/.ssh/id_rsa -p "$SSH_PORT" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
             "printf 'domain=%s\nslug=%s\nempresa_slug=%s\nzip_url=%s\ncommit=%s\nrun_id=%s\ndate=%s\nbase_href=%s\n' \
              '${{ steps.derive.outputs.domain }}' '${{ steps.derive.outputs.slug }}' '${{ steps.derive.outputs.empresa_slug }}' \
-             '${{ steps.derive.outputs.zip_url }}' \
-             '${{ github.sha }}' '${{ github.run_id }}' \"\$(date -u +'%F %T UTC')\" \
-             '${{ steps.derive.outputs.base_href }}' \
-             > '${{ steps.derive.outputs.dest_dir }}/version.txt'" 2>&1 | tee -a deploy.log
+             '${{ steps.derive.outputs.zip_url }}' '${{ github.sha }}' '${{ github.run_id }}' \"\$(date -u +'%F %T UTC')\" \
+             '${{ steps.derive.outputs.base_href }}' > '${{ steps.derive.outputs.dest_dir }}/version.txt'" 2>&1 | tee -a deploy.log
 
       # ===================== PUT DE STATUS (sempre usando api_base) =====================
       - name: Marcar CONCLUÍDO na API
@@ -270,16 +245,16 @@ jobs:
         run: |
           set -euo pipefail
           export LC_ALL=C.UTF-8
-          AUTH_ARGS=()
-          [[ -n "${API_TOKEN:-}" ]] && AUTH_ARGS=(-H "Authorization: Bearer ${API_TOKEN}")
+          AUTH=()
+          [[ -n "${API_TOKEN:-}" ]] && AUTH=(-H "Authorization: Bearer ${API_TOKEN}")
           echo "PUT ${API_BASE}/status-aplicacao/${APLICACAO_ID} -> concluído" | tee -a deploy.log
-          curl --fail-with-body -sS -X PUT \
-            -H "Content-Type: application/json; charset=utf-8" \
-            "${AUTH_ARGS[@]}" \
-            "${API_BASE}/status-aplicacao/${APLICACAO_ID}" \
-            --data-binary @- <<'JSON' | tee -a deploy.log
-{"status":"concluído","resumo_do_erro":null}
-JSON
+          printf '%s' '{"status":"concluído","resumo_do_erro":null}' \
+            | curl --fail-with-body -sS -X PUT \
+                -H "Content-Type: application/json; charset=utf-8" \
+                "${AUTH[@]}" \
+                "${API_BASE}/status-aplicacao/${APLICACAO_ID}" \
+                --data-binary @- \
+            | tee -a deploy.log
           echo >> deploy.log
 
       - name: Marcar FALHOU na API (com últimas 200 linhas do log)
@@ -292,16 +267,16 @@ JSON
           set -euo pipefail
           export LC_ALL=C.UTF-8
           ERR_SUMMARY="$(tail -n 200 deploy.log | sed 's/\\/\\\\/g; s/"/\\"/g')"
-          AUTH_ARGS=()
-          [[ -n "${API_TOKEN:-}" ]] && AUTH_ARGS=(-H "Authorization: Bearer ${API_TOKEN}")
+          AUTH=()
+          [[ -n "${API_TOKEN:-}" ]] && AUTH=(-H "Authorization: Bearer ${API_TOKEN}")
           echo "PUT ${API_BASE}/status-aplicacao/${APLICACAO_ID} -> falhou" | tee -a deploy.log
-          curl --fail-with-body -sS -X PUT \
-            -H "Content-Type: application/json; charset=utf-8" \
-            "${AUTH_ARGS[@]}" \
-            "${API_BASE}/status-aplicacao/${APLICACAO_ID}" \
-            --data-binary @- <<JSON | tee -a deploy.log
-{"status":"falhou","resumo_do_erro":"${ERR_SUMMARY}"}
-JSON
+          printf '%s' "{\"status\":\"falhou\",\"resumo_do_erro\":\"${ERR_SUMMARY}\"}" \
+            | curl --fail-with-body -sS -X PUT \
+                -H "Content-Type: application/json; charset=utf-8" \
+                "${AUTH[@]}" \
+                "${API_BASE}/status-aplicacao/${APLICACAO_ID}" \
+                --data-binary @- \
+            | tee -a deploy.log
           echo >> deploy.log
 
       - name: Marcar CANCELADO na API
@@ -313,14 +288,14 @@ JSON
         run: |
           set -euo pipefail
           export LC_ALL=C.UTF-8
-          AUTH_ARGS=()
-          [[ -n "${API_TOKEN:-}" ]] && AUTH_ARGS=(-H "Authorization: Bearer ${API_TOKEN}")
+          AUTH=()
+          [[ -n "${API_TOKEN:-}" ]] && AUTH=(-H "Authorization: Bearer ${API_TOKEN}")
           echo "PUT ${API_BASE}/status-aplicacao/${APLICACAO_ID} -> cancelado" | tee -a deploy.log
-          curl --fail-with-body -sS -X PUT \
-            -H "Content-Type: application/json; charset=utf-8" \
-            "${AUTH_ARGS[@]}" \
-            "${API_BASE}/status-aplicacao/${APLICACAO_ID}" \
-            --data-binary @- <<'JSON' | tee -a deploy.log
-{"status":"cancelado","resumo_do_erro":null}
-JSON
+          printf '%s' '{"status":"cancelado","resumo_do_erro":null}' \
+            | curl --fail-with-body -sS -X PUT \
+                -H "Content-Type: application/json; charset=utf-8" \
+                "${AUTH[@]}" \
+                "${API_BASE}/status-aplicacao/${APLICACAO_ID}" \
+                --data-binary @- \
+            | tee -a deploy.log
           echo >> deploy.log
