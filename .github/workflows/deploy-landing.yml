@@ -25,7 +25,7 @@ on:
         required: true
       api_base:
         description: 'URL base da API (ex: http://178.156.182.205/api)'
-        required: true   # <<< sem default pra não errar ambiente
+        required: true   # sem default pra não errar ambiente
 
 permissions:
   contents: write
@@ -269,17 +269,17 @@ jobs:
           API_TOKEN: ${{ secrets.API_TOKEN_DEPLOY }}
         run: |
           set -euo pipefail
+          export LC_ALL=C.UTF-8
           AUTH_ARGS=()
-          if [[ -n "${API_TOKEN:-}" ]]; then
-            AUTH_ARGS=(-H "Authorization: Bearer ${API_TOKEN}")
-          fi
+          [[ -n "${API_TOKEN:-}" ]] && AUTH_ARGS=(-H "Authorization: Bearer ${API_TOKEN}")
           echo "PUT ${API_BASE}/status-aplicacao/${APLICACAO_ID} -> concluído" | tee -a deploy.log
-          curl -fSs -X PUT \
-            -H "Content-Type: application/json" \
+          curl --fail-with-body -sS -X PUT \
+            -H "Content-Type: application/json; charset=utf-8" \
             "${AUTH_ARGS[@]}" \
             "${API_BASE}/status-aplicacao/${APLICACAO_ID}" \
-            --data '{"status":"concluído","resumo_do_erro":null}' \
-            | tee -a deploy.log
+            --data-binary @- <<'JSON' | tee -a deploy.log
+{"status":"concluído","resumo_do_erro":null}
+JSON
           echo >> deploy.log
 
       - name: Marcar FALHOU na API (com últimas 200 linhas do log)
@@ -290,20 +290,18 @@ jobs:
           API_TOKEN: ${{ secrets.API_TOKEN_DEPLOY }}
         run: |
           set -euo pipefail
-          ERR_SUMMARY="$(tail -n 200 deploy.log | sed 's/\\/\\\\/g; s/\"/\\"/g')"
+          export LC_ALL=C.UTF-8
+          ERR_SUMMARY="$(tail -n 200 deploy.log | sed 's/\\/\\\\/g; s/"/\\"/g')"
           AUTH_ARGS=()
-          if [[ -n "${API_TOKEN:-}" ]]; then
-            AUTH_ARGS=(-H "Authorization: Bearer ${API_TOKEN}")
-          fi
-          JSON_PAYLOAD="{\"status\":\"falhou\",\"resumo_do_erro\":\"${ERR_SUMMARY}\"}"
+          [[ -n "${API_TOKEN:-}" ]] && AUTH_ARGS=(-H "Authorization: Bearer ${API_TOKEN}")
           echo "PUT ${API_BASE}/status-aplicacao/${APLICACAO_ID} -> falhou" | tee -a deploy.log
-          echo "${JSON_PAYLOAD}" | tee -a deploy.log
-          curl -fSs -X PUT \
-            -H "Content-Type: application/json" \
+          curl --fail-with-body -sS -X PUT \
+            -H "Content-Type: application/json; charset=utf-8" \
             "${AUTH_ARGS[@]}" \
             "${API_BASE}/status-aplicacao/${APLICACAO_ID}" \
-            --data "${JSON_PAYLOAD}" \
-            | tee -a deploy.log
+            --data-binary @- <<JSON | tee -a deploy.log
+{"status":"falhou","resumo_do_erro":"${ERR_SUMMARY}"}
+JSON
           echo >> deploy.log
 
       - name: Marcar CANCELADO na API
@@ -314,15 +312,15 @@ jobs:
           API_TOKEN: ${{ secrets.API_TOKEN_DEPLOY }}
         run: |
           set -euo pipefail
+          export LC_ALL=C.UTF-8
           AUTH_ARGS=()
-          if [[ -n "${API_TOKEN:-}" ]]; then
-            AUTH_ARGS=(-H "Authorization: Bearer ${API_TOKEN}")
-          fi
+          [[ -n "${API_TOKEN:-}" ]] && AUTH_ARGS=(-H "Authorization: Bearer ${API_TOKEN}")
           echo "PUT ${API_BASE}/status-aplicacao/${APLICACAO_ID} -> cancelado" | tee -a deploy.log
-          curl -fSs -X PUT \
-            -H "Content-Type: application/json" \
+          curl --fail-with-body -sS -X PUT \
+            -H "Content-Type: application/json; charset=utf-8" \
             "${AUTH_ARGS[@]}" \
             "${API_BASE}/status-aplicacao/${APLICACAO_ID}" \
-            --data '{"status":"cancelado","resumo_do_erro":null}' \
-            | tee -a deploy.log
+            --data-binary @- <<'JSON' | tee -a deploy.log
+{"status":"cancelado","resumo_do_erro":null}
+JSON
           echo >> deploy.log
