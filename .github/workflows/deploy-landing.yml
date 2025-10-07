@@ -24,7 +24,7 @@ on:
         description: 'ID da aplicação no banco (para PUT de status)'
         required: true
       api_base:
-        description: 'URL base da API (ex: https://gestordecapitais.com)'
+        description: 'URL base da API (ex: https://gestordecapitais.com ou http://IP:PORT/api)'
         required: false
         default: 'https://gestordecapitais.com'
 
@@ -276,11 +276,14 @@ jobs:
           if [[ -n "${API_TOKEN:-}" ]]; then
             AUTH_ARGS=(-H "Authorization: Bearer ${API_TOKEN}")
           fi
-          curl -sS -X PUT \
+          echo "PUT ${API_BASE}/status-aplicacao/${APLICACAO_ID} -> concluído" | tee -a deploy.log
+          curl -fSs -X PUT \
             -H "Content-Type: application/json" \
             "${AUTH_ARGS[@]}" \
             "${API_BASE}/status-aplicacao/${APLICACAO_ID}" \
-            --data '{"status":"concluído"}'
+            --data '{"status":"concluído"}' \
+            | tee -a deploy.log
+          echo >> deploy.log
 
       - name: Marcar FALHOU na API (com últimas 200 linhas do log)
         if: failure()
@@ -290,17 +293,21 @@ jobs:
           API_TOKEN: ${{ secrets.API_TOKEN_DEPLOY }}
         run: |
           set -euo pipefail
-          ERR_SUMMARY="$(tail -n 200 deploy.log | sed 's/\\/\\\\/g; s/"/\\"/g')"
+          ERR_SUMMARY="$(tail -n 200 deploy.log | sed 's/\\/\\\\/g; s/\"/\\"/g')"
           AUTH_ARGS=()
           if [[ -n "${API_TOKEN:-}" ]]; then
             AUTH_ARGS=(-H "Authorization: Bearer ${API_TOKEN}")
           fi
           JSON_PAYLOAD="{\"status\":\"falhou\",\"resumo_do_erro\":\"${ERR_SUMMARY}\"}"
-          curl -sS -X PUT \
+          echo "PUT ${API_BASE}/status-aplicacao/${APLICACAO_ID} -> falhou" | tee -a deploy.log
+          echo "${JSON_PAYLOAD}" | tee -a deploy.log
+          curl -fSs -X PUT \
             -H "Content-Type: application/json" \
             "${AUTH_ARGS[@]}" \
             "${API_BASE}/status-aplicacao/${APLICACAO_ID}" \
-            --data "${JSON_PAYLOAD}"
+            --data "${JSON_PAYLOAD}" \
+            | tee -a deploy.log
+          echo >> deploy.log
 
       - name: Marcar CANCELADO na API
         if: cancelled()
@@ -314,8 +321,11 @@ jobs:
           if [[ -n "${API_TOKEN:-}" ]]; then
             AUTH_ARGS=(-H "Authorization: Bearer ${API_TOKEN}")
           fi
-          curl -sS -X PUT \
+          echo "PUT ${API_BASE}/status-aplicacao/${APLICACAO_ID} -> cancelado" | tee -a deploy.log
+          curl -fSs -X PUT \
             -H "Content-Type: application/json" \
             "${AUTH_ARGS[@]}" \
             "${API_BASE}/status-aplicacao/${APLICACAO_ID}" \
-            --data '{"status":"cancelado"}'
+            --data '{"status":"cancelado"}' \
+            | tee -a deploy.log
+          echo >> deploy.log
