@@ -24,9 +24,8 @@ on:
         description: 'ID da aplicação no banco (para PUT de status)'
         required: true
       api_base:
-        description: 'URL base da API (ex: https://gestordecapitais.com/api ou http://IP:PORT/api)'
-        required: false
-        default: 'https://gestordecapitais.com/api'
+        description: 'URL base da API (ex: http://178.156.182.205/api)'
+        required: true   # <<< sem default pra não errar ambiente
 
 permissions:
   contents: write
@@ -60,6 +59,13 @@ jobs:
           ZIP_URL="${{ github.event.inputs.zip_url }}"
           APLICACAO_ID="${{ github.event.inputs.aplicacao_id }}"
           API_BASE="${{ github.event.inputs.api_base }}"
+
+          # Normalizar api_base: exigir valor e remover barra final
+          if [[ -z "${API_BASE:-}" ]]; then
+            echo "api_base é obrigatório (ex.: http://178.156.182.205/api)" | tee -a deploy.log
+            exit 1
+          fi
+          API_BASE="${API_BASE%/}"
 
           echo ">>> Inputs:" | tee -a deploy.log
           echo "  domain=${DOMAIN}" | tee -a deploy.log
@@ -254,7 +260,7 @@ jobs:
              '${{ steps.derive.outputs.base_href }}' \
              > '${{ steps.derive.outputs.dest_dir }}/version.txt'" 2>&1 | tee -a deploy.log
 
-      # ===================== PUT DE STATUS (com /api e json completo) =====================
+      # ===================== PUT DE STATUS (sempre usando api_base) =====================
       - name: Marcar CONCLUÍDO na API
         if: success()
         env:
