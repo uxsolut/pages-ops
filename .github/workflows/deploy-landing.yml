@@ -245,9 +245,12 @@ jobs:
         run: |
           set -euo pipefail
           export LC_ALL=C.UTF-8
+
           AUTH=()
           [[ -n "${API_TOKEN:-}" ]] && AUTH=(-H "Authorization: Bearer ${API_TOKEN}")
+
           echo "PUT ${API_BASE}/status-aplicacao/${APLICACAO_ID} -> concluído" | tee -a deploy.log
+
           printf '%s' '{"status":"concluído","resumo_do_erro":null}' \
             | curl --fail-with-body -sS -X PUT \
                 -H "Content-Type: application/json; charset=utf-8" \
@@ -266,11 +269,19 @@ jobs:
         run: |
           set -euo pipefail
           export LC_ALL=C.UTF-8
-          ERR_SUMMARY="$(tail -n 200 deploy.log | sed 's/\\/\\\\/g; s/"/\\"/g')"
+
+          # Serializa as últimas 200 linhas do log em uma STRING JSON válida
+          ERR_SUMMARY_JSON="$(tail -n 200 deploy.log | jq -Rs .)"
+
           AUTH=()
           [[ -n "${API_TOKEN:-}" ]] && AUTH=(-H "Authorization: Bearer ${API_TOKEN}")
+
           echo "PUT ${API_BASE}/status-aplicacao/${APLICACAO_ID} -> falhou" | tee -a deploy.log
-          printf '%s' "{\"status\":\"falhou\",\"resumo_do_erro\":\"${ERR_SUMMARY}\"}" \
+
+          JSON_PAYLOAD="{\"status\":\"falhou\",\"resumo_do_erro\":${ERR_SUMMARY_JSON}}"
+          echo "${JSON_PAYLOAD}" | tee -a deploy.log
+
+          printf '%s' "${JSON_PAYLOAD}" \
             | curl --fail-with-body -sS -X PUT \
                 -H "Content-Type: application/json; charset=utf-8" \
                 "${AUTH[@]}" \
@@ -288,9 +299,12 @@ jobs:
         run: |
           set -euo pipefail
           export LC_ALL=C.UTF-8
+
           AUTH=()
           [[ -n "${API_TOKEN:-}" ]] && AUTH=(-H "Authorization: Bearer ${API_TOKEN}")
+
           echo "PUT ${API_BASE}/status-aplicacao/${APLICACAO_ID} -> cancelado" | tee -a deploy.log
+
           printf '%s' '{"status":"cancelado","resumo_do_erro":null}' \
             | curl --fail-with-body -sS -X PUT \
                 -H "Content-Type: application/json; charset=utf-8" \
