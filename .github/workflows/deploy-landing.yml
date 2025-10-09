@@ -203,26 +203,23 @@ jobs:
           APLICACAO_ID: ${{ steps.derive.outputs.aplicacao_id }}
         run: |
           set -euo pipefail
-          # usa barra final e segue redirect (-L)
           URL="${API_BASE%/}/page-meta/?aplicacao_id=${APLICACAO_ID}&rota=%2F&lang_tag=pt-BR"
           echo "GET $URL" | tee -a deploy.log
+          # ⬇⬇ salva DENTRO de _src para facilitar o caminho relativo no próximo passo
           curl -fLsS -L "$URL" \
             -H "Accept: application/json" \
-            -o _meta.json || echo "[]" > _meta.json
-          # logs úteis
-          echo -n "Meta bytes: " | tee -a deploy.log
-          wc -c < _meta.json | tee -a deploy.log
-          echo -n "Meta length: " | tee -a deploy.log
-          (jq -r 'length' _meta.json 2>/dev/null || echo 0) | tee -a deploy.log
+            -o _src/_meta.json || echo "[]" > _src/_meta.json
+          echo -n "Meta bytes: " | tee -a deploy.log; wc -c < _src/_meta.json | tee -a deploy.log
+          echo -n "Meta length: " | tee -a deploy.log; (jq -r 'length' _src/_meta.json 2>/dev/null || echo 0) | tee -a deploy.log
           echo "Preview do primeiro item:" | tee -a deploy.log
-          (jq -r '.[0]' _meta.json 2>/dev/null | head -c 400 || true) | tee -a deploy.log
+          (jq -r '.[0]' _src/_meta.json 2>/dev/null | head -c 400 || true) | tee -a deploy.log
           echo | tee -a deploy.log
 
       - name: Injetar metadados no index.html (se houver)
         working-directory: _src/build/web
         run: |
           set -euo pipefail
-          # Se não houver itens, sai silencioso
+          # Agora o arquivo está em ../../_meta.json (=_src/_meta.json)
           test -s ../../_meta.json || exit 0
           if ! jq -e 'length>0' ../../_meta.json >/dev/null 2>&1; then exit 0; fi
 
@@ -237,38 +234,30 @@ jobs:
           OG_TYPE="$(jq -r '.og_type // "website"' ../../_meta_one.json)"
           SITE_NAME="$(jq -r '.site_name // empty' ../../_meta_one.json)"
 
-          # Blocos opcionais
           ARTICLE_JSON="$(jq -c 'try .article // {}' ../../_meta_one.json)"
           PRODUCT_JSON="$(jq -c 'try .product // {}' ../../_meta_one.json)"
           LOCALBIZ_JSON="$(jq -c 'try .localbusiness // {}' ../../_meta_one.json)"
 
-          # Limpa possíveis tags antigas básicas para evitar duplicatas
           sed -i '/<meta name="description"/Id' index.html
           sed -i '/<link rel="canonical"/Id' index.html
           sed -i '/<meta property="og:/Id' index.html
           sed -i '/<meta name="twitter:/Id' index.html
 
-          # Prepara bloco a ser injetado
           {
             echo '<!-- injected SEO start -->'
             [[ -n "$TITLE" ]] && echo "<title>${TITLE}</title>"
             [[ -n "$DESC"  ]] && echo "<meta name=\"description\" content=\"${DESC}\">"
             [[ -n "$CANON" ]] && echo "<link rel=\"canonical\" href=\"${CANON}\">"
-
-            # Open Graph
             [[ -n "$OG_TITLE" ]] && echo "<meta property=\"og:title\" content=\"${OG_TITLE}\">"
             [[ -n "$OG_DESC"  ]] && echo "<meta property=\"og:description\" content=\"${OG_DESC}\">"
             [[ -n "$OG_IMG"   ]] && echo "<meta property=\"og:image\" content=\"${OG_IMG}\">"
             [[ -n "$OG_TYPE"  ]] && echo "<meta property=\"og:type\" content=\"${OG_TYPE}\">"
             [[ -n "$SITE_NAME" ]] && echo "<meta property=\"og:site_name\" content=\"${SITE_NAME}\">"
-
-            # Twitter (usa og como fallback)
             [[ -n "$OG_TITLE" ]] && echo "<meta name=\"twitter:title\" content=\"${OG_TITLE}\">"
             [[ -n "$OG_DESC"  ]] && echo "<meta name=\"twitter:description\" content=\"${OG_DESC}\">"
             [[ -n "$OG_IMG"   ]] && echo "<meta name=\"twitter:image\" content=\"${OG_IMG}\">"
             echo "<meta name=\"twitter:card\" content=\"summary_large_image\">"
 
-            # JSON-LD (gera somente se tiver conteúdo)
             if jq -e 'with_entries(select(.value != null)) | length>0' <<<"$ARTICLE_JSON" >/dev/null; then
               jq -n --argjson a "$ARTICLE_JSON" \
                  '{ "@context":"https://schema.org", "@type": ($a.type // "Article"),
@@ -303,7 +292,6 @@ jobs:
             echo '<!-- injected SEO end -->'
           } > __inject.html
 
-          # Injeta após a primeira tag <head>
           awk 'BEGIN{done=0} {print; if(!done && tolower($0) ~ /<head[^>]*>/){system("cat __inject.html"); done=1}}' index.html > __index.html
           mv __index.html index.html
           rm -f __inject.html
