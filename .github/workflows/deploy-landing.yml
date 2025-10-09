@@ -196,6 +196,112 @@ jobs:
             flutter build web --release --base-href "${{ steps.derive.outputs.base_href }}" 2>&1 | tee -a ../deploy.log
           fi
 
+      # ===================== (NOVO) BAIXAR E INJETAR METADADOS =====================
+      - name: Baixar metadados (opcional)
+        env:
+          API_BASE: ${{ steps.derive.outputs.api_base }}
+          APLICACAO_ID: ${{ steps.derive.outputs.aplicacao_id }}
+        run: |
+          set -euo pipefail
+          # Busca metadados específicos para a homepage (rota="/", lang="pt-BR")
+          curl -fsS "${API_BASE}/page-meta?aplicacao_id=${APLICACAO_ID}&rota=%2F&lang_tag=pt-BR" \
+            -H "Accept: application/json" \
+            -o _meta.json || echo "[]" > _meta.json
+          echo "Meta baixado:" | tee -a deploy.log
+          head -n 1 _meta.json | tee -a deploy.log
+
+      - name: Injetar metadados no index.html (se houver)
+        working-directory: _src/build/web
+        run: |
+          set -euo pipefail
+          # Se não houver itens, sai silencioso
+          test -s ../../_meta.json || exit 0
+          if ! jq -e 'length>0' ../../_meta.json >/dev/null 2>&1; then exit 0; fi
+
+          jq -r '.[0]' ../../_meta.json > ../../_meta_one.json
+
+          TITLE="$(jq -r '.seo_title // empty' ../../_meta_one.json)"
+          DESC="$(jq -r '.seo_description // empty' ../../_meta_one.json)"
+          CANON="$(jq -r '.canonical_url // empty' ../../_meta_one.json)"
+          OG_TITLE="$(jq -r '.og_title // empty' ../../_meta_one.json)"
+          OG_DESC="$(jq -r '.og_description // empty' ../../_meta_one.json)"
+          OG_IMG="$(jq -r '.og_image_url // empty' ../../_meta_one.json)"
+          OG_TYPE="$(jq -r '.og_type // "website"' ../../_meta_one.json)"
+          SITE_NAME="$(jq -r '.site_name // empty' ../../_meta_one.json)"
+
+          # Blocos opcionais
+          ARTICLE_JSON="$(jq -c 'try .article // {}' ../../_meta_one.json)"
+          PRODUCT_JSON="$(jq -c 'try .product // {}' ../../_meta_one.json)"
+          LOCALBIZ_JSON="$(jq -c 'try .localbusiness // {}' ../../_meta_one.json)"
+
+          # Limpa possíveis tags antigas básicas para evitar duplicatas
+          sed -i '/<meta name="description"/Id' index.html
+          sed -i '/<link rel="canonical"/Id' index.html
+          sed -i '/<meta property="og:/Id' index.html
+          sed -i '/<meta name="twitter:/Id' index.html
+
+          # Prepara bloco a ser injetado
+          {
+            echo '<!-- injected SEO start -->'
+            [[ -n "$TITLE" ]] && echo "<title>${TITLE}</title>"
+            [[ -n "$DESC"  ]] && echo "<meta name=\"description\" content=\"${DESC}\">"
+            [[ -n "$CANON" ]] && echo "<link rel=\"canonical\" href=\"${CANON}\">"
+
+            # Open Graph
+            [[ -n "$OG_TITLE" ]] && echo "<meta property=\"og:title\" content=\"${OG_TITLE}\">"
+            [[ -n "$OG_DESC"  ]] && echo "<meta property=\"og:description\" content=\"${OG_DESC}\">"
+            [[ -n "$OG_IMG"   ]] && echo "<meta property=\"og:image\" content=\"${OG_IMG}\">"
+            [[ -n "$OG_TYPE"  ]] && echo "<meta property=\"og:type\" content=\"${OG_TYPE}\">"
+            [[ -n "$SITE_NAME" ]] && echo "<meta property=\"og:site_name\" content=\"${SITE_NAME}\">"
+
+            # Twitter (usa og como fallback)
+            [[ -n "$OG_TITLE" ]] && echo "<meta name=\"twitter:title\" content=\"${OG_TITLE}\">"
+            [[ -n "$OG_DESC"  ]] && echo "<meta name=\"twitter:description\" content=\"${OG_DESC}\">"
+            [[ -n "$OG_IMG"   ]] && echo "<meta name=\"twitter:image\" content=\"${OG_IMG}\">"
+            echo "<meta name=\"twitter:card\" content=\"summary_large_image\">"
+
+            # JSON-LD (gera somente se tiver conteúdo)
+            if jq -e 'with_entries(select(.value != null)) | length>0' <<<"$ARTICLE_JSON" >/dev/null; then
+              jq -n --argjson a "$ARTICLE_JSON" \
+                 '{ "@context":"https://schema.org", "@type": ($a.type // "Article"),
+                    "headline":$a.headline, "description":$a.description, "author":($a.author_name // null),
+                    "datePublished":$a.date_published, "dateModified":$a.date_modified,
+                    "image":($a.cover_image_url // null) }' \
+              | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/' 
+            fi
+
+            if jq -e 'with_entries(select(.value != null)) | length>0' <<<"$PRODUCT_JSON" >/dev/null; then
+              jq -n --argjson p "$PRODUCT_JSON" \
+                 '{ "@context":"https://schema.org", "@type":"Product",
+                    "name":$p.name, "description":$p.description, "sku":$p.sku, "brand":$p.brand,
+                    "image":$p.image_urls,
+                    "offers":{"@type":"Offer","priceCurrency":$p.price_currency, "price":($p.price|tostring?),
+                              "availability":$p.availability,"itemCondition":$p.item_condition,
+                              "priceValidUntil":$p.price_valid_until} }' \
+              | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/' 
+            fi
+
+            if jq -e 'with_entries(select(.value != null)) | length>0' <<<"$LOCALBIZ_JSON" >/dev/null; then
+              jq -n --argjson b "$LOCALBIZ_JSON" \
+                 '{ "@context":"https://schema.org", "@type":"LocalBusiness",
+                    "name":$b.business_name, "telephone":$b.phone, "priceRange":$b.price_range,
+                    "address":{"@type":"PostalAddress","streetAddress":$b.street,"addressLocality":$b.city,
+                               "addressRegion":$b.region,"postalCode":$b.zip},
+                    "geo":{"@type":"GeoCoordinates","latitude":$b.latitude,"longitude":$b.longitude},
+                    "openingHours":$b.opening_hours, "image":$b.image_urls }' \
+              | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/' 
+            fi
+
+            echo '<!-- injected SEO end -->'
+          } > __inject.html
+
+          # Injeta após a primeira tag <head>
+          awk 'BEGIN{done=0} {print; if(!done && tolower($0) ~ /<head[^>]*>/){system("cat __inject.html"); done=1}}' index.html > __index.html
+          mv __index.html index.html
+          rm -f __inject.html
+
+      # ===================== FIM METADADOS =====================
+
       - name: Criar diretório destino
         run: |
           set -euo pipefail
@@ -269,8 +375,6 @@ jobs:
         run: |
           set -euo pipefail
           export LC_ALL=C.UTF-8
-
-          # Serializa as últimas 200 linhas do log em uma STRING JSON válida
           ERR_SUMMARY_JSON="$(tail -n 200 deploy.log | jq -Rs .)"
 
           AUTH=()
