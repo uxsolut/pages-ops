@@ -205,7 +205,6 @@ jobs:
           set -euo pipefail
           URL="${API_BASE%/}/page-meta/?aplicacao_id=${APLICACAO_ID}&rota=%2F&lang_tag=pt-BR"
           echo "GET $URL" | tee -a deploy.log
-          # salva DENTRO de _src para caminho consistente no próximo passo
           curl -fLsS -L "$URL" \
             -H "Accept: application/json" \
             -o _src/_meta.json || echo "[]" > _src/_meta.json
@@ -221,7 +220,6 @@ jobs:
         working-directory: _src/build/web
         run: |
           set -euo pipefail
-          # Arquivo meta está em ../../_meta.json (=_src/_meta.json)
           test -s ../../_meta.json || exit 0
           if ! jq -e 'length>0' ../../_meta.json >/dev/null 2>&1; then exit 0; fi
 
@@ -240,46 +238,38 @@ jobs:
           PRODUCT_JSON="$(jq -c 'try .product // {}' ../../_meta_one.json)"
           LOCALBIZ_JSON="$(jq -c 'try .localbusiness // {}' ../../_meta_one.json)"
 
-          # Define robots: produção = index,follow | dev/beta = noindex,nofollow
-          if [[ -z "${STATE:-}" ]]; then
-            ROBOTS_CONTENT="index,follow"
-          else
-            ROBOTS_CONTENT="noindex,nofollow"
-          fi
-
-          # Remove duplicatas antigas: robots/description/og/twitter/canonical/title
-          sed -i '/<meta name="robots"/Id' index.html
+          # Remove duplicatas e qualquer <title> antigo
           sed -i '/<meta name="description"/Id' index.html
           sed -i '/<link rel="canonical"/Id' index.html
           sed -i '/<meta property="og:/Id' index.html
           sed -i '/<meta name="twitter:/Id' index.html
           sed -i '/<title>.*<\/title>/Id' index.html
 
+          # robots somente em dev/beta
+          ROBOTS=""
+          if [[ "${STATE:-}" == "dev" || "${STATE:-}" == "beta" ]]; then
+            ROBOTS='<meta name="robots" content="noindex,nofollow">'
+          fi
+
           {
             echo '<!-- injected SEO start -->'
-            echo "<meta name=\"robots\" content=\"${ROBOTS_CONTENT}\">"
             [[ -n "$TITLE" ]] && echo "<title>${TITLE}</title>"
             [[ -n "$DESC"  ]] && echo "<meta name=\"description\" content=\"${DESC}\">"
             [[ -n "$CANON" ]] && echo "<link rel=\"canonical\" href=\"${CANON}\">"
+            [[ -n "$ROBOTS" ]] && echo "$ROBOTS"
 
-            # Open Graph
             [[ -n "$OG_TITLE" ]] && echo "<meta property=\"og:title\" content=\"${OG_TITLE}\">"
             [[ -n "$OG_DESC"  ]] && echo "<meta property=\"og:description\" content=\"${OG_DESC}\">"
-            if [[ -n "$OG_IMG" ]]; then
-              echo "<meta property=\"og:image\" content=\"${OG_IMG}\">"
-              echo "<meta property=\"og:image:width\" content=\"1200\">"
-              echo "<meta property=\"og:image:height\" content=\"630\">"
-            fi
+            [[ -n "$OG_IMG"   ]] && echo "<meta property=\"og:image\" content=\"${OG_IMG}\">"
             [[ -n "$OG_TYPE"  ]] && echo "<meta property=\"og:type\" content=\"${OG_TYPE}\">"
             [[ -n "$SITE_NAME" ]] && echo "<meta property=\"og:site_name\" content=\"${SITE_NAME}\">"
 
-            # Twitter
             [[ -n "$OG_TITLE" ]] && echo "<meta name=\"twitter:title\" content=\"${OG_TITLE}\">"
             [[ -n "$OG_DESC"  ]] && echo "<meta name=\"twitter:description\" content=\"${OG_DESC}\">"
             [[ -n "$OG_IMG"   ]] && echo "<meta name=\"twitter:image\" content=\"${OG_IMG}\">"
             echo "<meta name=\"twitter:card\" content=\"summary_large_image\">"
 
-            # JSON-LD opcionais
+            # JSON-LD: Article
             if jq -e 'with_entries(select(.value != null)) | length>0' <<<"$ARTICLE_JSON" >/dev/null; then
               jq -n --argjson a "$ARTICLE_JSON" \
                  '{ "@context":"https://schema.org", "@type": ($a.type // "Article"),
@@ -289,6 +279,7 @@ jobs:
               | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/'
             fi
 
+            # JSON-LD: Product
             if jq -e 'with_entries(select(.value != null)) | length>0' <<<"$PRODUCT_JSON" >/dev/null; then
               jq -n --argjson p "$PRODUCT_JSON" \
                  '{ "@context":"https://schema.org", "@type":"Product",
@@ -300,6 +291,7 @@ jobs:
               | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/'
             fi
 
+            # JSON-LD: LocalBusiness
             if jq -e 'with_entries(select(.value != null)) | length>0' <<<"$LOCALBIZ_JSON" >/dev/null; then
               jq -n --argjson b "$LOCALBIZ_JSON" \
                  '{ "@context":"https://schema.org", "@type":"LocalBusiness",
@@ -314,22 +306,36 @@ jobs:
             echo '<!-- injected SEO end -->'
           } > __inject.html
 
-          # Injeta preferencialmente após o <meta charset>; senão, após <head>
+          # 1ª tentativa: injetar logo após <meta charset>
           awk '
-            BEGIN{done=0}
+            BEGIN{inj=""; while((getline l < "__inject.html")>0){inj=inj l ORS} close("__inject.html"); done=0}
             {
               print
-              if(!done && tolower($0) ~ /<meta[^>]+charset=/){
-                system("cat __inject.html"); done=1
+              if(!done && tolower($0) ~ /<meta[^>]*charset=/){
+                printf "%s", inj
+                done=1
               }
             }
-            END{
-              if(!done){
-                system("awk \\''BEGIN{ins=0} {print; if(!ins && tolower($0) ~ /<head[^>]*>/){system(\\"cat __inject.html\\"); ins=1}}\\'' index.html > __index2.html && mv __index2.html index.html")
+          ' index.html > __index1.html
+
+          if grep -q "<!-- injected SEO start -->" __index1.html; then
+            mv __index1.html index.html
+          else
+            # 2ª tentativa (fallback): injetar após <head>
+            awk '
+              BEGIN{inj=""; while((getline l < "__inject.html")>0){inj=inj l ORS} close("__inject.html"); ins=0}
+              {
+                print
+                if(!ins && tolower($0) ~ /<head[^>]*>/){
+                  printf "%s", inj
+                  ins=1
+                }
               }
-            }
-          ' index.html > __index.html
-          mv __index.html index.html
+            ' index.html > __index2.html
+            mv __index2.html index.html
+            rm -f __index1.html || true
+          fi
+
           rm -f __inject.html
 
       # ===================== FIM METADADOS =====================
@@ -383,12 +389,9 @@ jobs:
         run: |
           set -euo pipefail
           export LC_ALL=C.UTF-8
-
           AUTH=()
           [[ -n "${API_TOKEN:-}" ]] && AUTH=(-H "Authorization: Bearer ${API_TOKEN}")
-
           echo "PUT ${API_BASE}/status-aplicacao/${APLICACAO_ID} -> concluído" | tee -a deploy.log
-
           printf '%s' '{"status":"concluído","resumo_do_erro":null}' \
             | curl --fail-with-body -sS -X PUT \
                 -H "Content-Type: application/json; charset=utf-8" \
@@ -408,44 +411,8 @@ jobs:
           set -euo pipefail
           export LC_ALL=C.UTF-8
           ERR_SUMMARY_JSON="$(tail -n 200 deploy.log | jq -Rs .)"
-
           AUTH=()
           [[ -n "${API_TOKEN:-}" ]] && AUTH=(-H "Authorization: Bearer ${API_TOKEN}")
-
           echo "PUT ${API_BASE}/status-aplicacao/${APLICACAO_ID} -> falhou" | tee -a deploy.log
-
           JSON_PAYLOAD="{\"status\":\"falhou\",\"resumo_do_erro\":${ERR_SUMMARY_JSON}}"
-          echo "${JSON_PAYLOAD}" | tee -a deploy.log
-
-          printf '%s' "${JSON_PAYLOAD}" \
-            | curl --fail-with-body -sS -X PUT \
-                -H "Content-Type: application/json; charset=utf-8" \
-                "${AUTH[@]}" \
-                "${API_BASE}/status-aplicacao/${APLICACAO_ID}" \
-                --data-binary @- \
-            | tee -a deploy.log
-          echo >> deploy.log
-
-      - name: Marcar CANCELADO na API
-        if: cancelled()
-        env:
-          API_BASE: ${{ steps.derive.outputs.api_base }}
-          APLICACAO_ID: ${{ steps.derive.outputs.aplicacao_id }}
-          API_TOKEN: ${{ secrets.API_TOKEN_DEPLOY }}
-        run: |
-          set -euo pipefail
-          export LC_ALL=C.UTF-8
-
-          AUTH=()
-          [[ -n "${API_TOKEN:-}" ]] && AUTH=(-H "Authorization: Bearer ${API_TOKEN}")
-
-          echo "PUT ${API_BASE}/status-aplicacao/${APLICACAO_ID} -> cancelado" | tee -a deploy.log
-
-          printf '%s' '{"status":"cancelado","resumo_do_erro":null}' \
-            | curl --fail-with-body -sS -X PUT \
-                -H "Content-Type: application/json; charset=utf-8" \
-                "${AUTH[@]}" \
-                "${API_BASE}/status-aplicacao/${APLICACAO_ID}" \
-                --data-binary @- \
-            | tee -a deploy.log
-          echo >> deploy.log
+          echo "${JSON_PAY
