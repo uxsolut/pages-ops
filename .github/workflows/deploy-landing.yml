@@ -203,12 +203,20 @@ jobs:
           APLICACAO_ID: ${{ steps.derive.outputs.aplicacao_id }}
         run: |
           set -euo pipefail
-          # Busca metadados específicos para a homepage (rota="/", lang="pt-BR")
-          curl -fsS "${API_BASE}/page-meta?aplicacao_id=${APLICACAO_ID}&rota=%2F&lang_tag=pt-BR" \
+          # usa barra final e segue redirect (-L)
+          URL="${API_BASE%/}/page-meta/?aplicacao_id=${APLICACAO_ID}&rota=%2F&lang_tag=pt-BR"
+          echo "GET $URL" | tee -a deploy.log
+          curl -fLsS -L "$URL" \
             -H "Accept: application/json" \
             -o _meta.json || echo "[]" > _meta.json
-          echo "Meta baixado:" | tee -a deploy.log
-          head -n 1 _meta.json | tee -a deploy.log
+          # logs úteis
+          echo -n "Meta bytes: " | tee -a deploy.log
+          wc -c < _meta.json | tee -a deploy.log
+          echo -n "Meta length: " | tee -a deploy.log
+          (jq -r 'length' _meta.json 2>/dev/null || echo 0) | tee -a deploy.log
+          echo "Preview do primeiro item:" | tee -a deploy.log
+          (jq -r '.[0]' _meta.json 2>/dev/null | head -c 400 || true) | tee -a deploy.log
+          echo | tee -a deploy.log
 
       - name: Injetar metadados no index.html (se houver)
         working-directory: _src/build/web
@@ -267,7 +275,7 @@ jobs:
                     "headline":$a.headline, "description":$a.description, "author":($a.author_name // null),
                     "datePublished":$a.date_published, "dateModified":$a.date_modified,
                     "image":($a.cover_image_url // null) }' \
-              | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/' 
+              | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/'
             fi
 
             if jq -e 'with_entries(select(.value != null)) | length>0' <<<"$PRODUCT_JSON" >/dev/null; then
@@ -278,7 +286,7 @@ jobs:
                     "offers":{"@type":"Offer","priceCurrency":$p.price_currency, "price":($p.price|tostring?),
                               "availability":$p.availability,"itemCondition":$p.item_condition,
                               "priceValidUntil":$p.price_valid_until} }' \
-              | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/' 
+              | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/'
             fi
 
             if jq -e 'with_entries(select(.value != null)) | length>0' <<<"$LOCALBIZ_JSON" >/dev/null; then
@@ -289,7 +297,7 @@ jobs:
                                "addressRegion":$b.region,"postalCode":$b.zip},
                     "geo":{"@type":"GeoCoordinates","latitude":$b.latitude,"longitude":$b.longitude},
                     "openingHours":$b.opening_hours, "image":$b.image_urls }' \
-              | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/' 
+              | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/'
             fi
 
             echo '<!-- injected SEO end -->'
