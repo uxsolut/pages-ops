@@ -240,30 +240,36 @@ jobs:
           PRODUCT_JSON="$(jq -c 'try .product // {}' ../../_meta_one.json)"
           LOCALBIZ_JSON="$(jq -c 'try .localbusiness // {}' ../../_meta_one.json)"
 
-          # Remove duplicatas: description/og/twitter/canonical e também QUALQUER <title> antigo
+          # Define robots: produção = index,follow | dev/beta = noindex,nofollow
+          if [[ -z "${STATE:-}" ]]; then
+            ROBOTS_CONTENT="index,follow"
+          else
+            ROBOTS_CONTENT="noindex,nofollow"
+          fi
+
+          # Remove duplicatas antigas: robots/description/og/twitter/canonical/title
+          sed -i '/<meta name="robots"/Id' index.html
           sed -i '/<meta name="description"/Id' index.html
           sed -i '/<link rel="canonical"/Id' index.html
           sed -i '/<meta property="og:/Id' index.html
           sed -i '/<meta name="twitter:/Id' index.html
           sed -i '/<title>.*<\/title>/Id' index.html
 
-          # Caso dev/beta: noindex
-          ROBOTS=""
-          if [[ "${STATE:-}" == "dev" || "${STATE:-}" == "beta" ]]; then
-            ROBOTS='<meta name="robots" content="noindex,nofollow">'
-          fi
-
           {
             echo '<!-- injected SEO start -->'
+            echo "<meta name=\"robots\" content=\"${ROBOTS_CONTENT}\">"
             [[ -n "$TITLE" ]] && echo "<title>${TITLE}</title>"
             [[ -n "$DESC"  ]] && echo "<meta name=\"description\" content=\"${DESC}\">"
             [[ -n "$CANON" ]] && echo "<link rel=\"canonical\" href=\"${CANON}\">"
-            [[ -n "$ROBOTS" ]] && echo "$ROBOTS"
 
             # Open Graph
             [[ -n "$OG_TITLE" ]] && echo "<meta property=\"og:title\" content=\"${OG_TITLE}\">"
             [[ -n "$OG_DESC"  ]] && echo "<meta property=\"og:description\" content=\"${OG_DESC}\">"
-            [[ -n "$OG_IMG"   ]] && echo "<meta property=\"og:image\" content=\"${OG_IMG}\">"
+            if [[ -n "$OG_IMG" ]]; then
+              echo "<meta property=\"og:image\" content=\"${OG_IMG}\">"
+              echo "<meta property=\"og:image:width\" content=\"1200\">"
+              echo "<meta property=\"og:image:height\" content=\"630\">"
+            fi
             [[ -n "$OG_TYPE"  ]] && echo "<meta property=\"og:type\" content=\"${OG_TYPE}\">"
             [[ -n "$SITE_NAME" ]] && echo "<meta property=\"og:site_name\" content=\"${SITE_NAME}\">"
 
@@ -308,7 +314,7 @@ jobs:
             echo '<!-- injected SEO end -->'
           } > __inject.html
 
-          # Injeta preferencialmente após o <meta charset>; se não achar, após <head>
+          # Injeta preferencialmente após o <meta charset>; senão, após <head>
           awk '
             BEGIN{done=0}
             {
@@ -319,10 +325,7 @@ jobs:
             }
             END{
               if(!done){
-                # fallback: injeta depois de <head>
-                # (fazemos uma segunda passada rápida em shell)
-                # substitui a primeira ocorrência de <head> por <head>\n[bloco]
-                system("awk \\''BEGIN{ins=0} {print; if(!ins && tolower($0) ~ /<head[^>]*>/){system(\"cat __inject.html\"); ins=1}}\\'' index.html > __index2.html && mv __index2.html index.html")
+                system("awk \\''BEGIN{ins=0} {print; if(!ins && tolower($0) ~ /<head[^>]*>/){system(\\"cat __inject.html\\"); ins=1}}\\'' index.html > __index2.html && mv __index2.html index.html")
               }
             }
           ' index.html > __index.html
