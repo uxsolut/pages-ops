@@ -205,7 +205,7 @@ jobs:
           set -euo pipefail
           URL="${API_BASE%/}/page-meta/?aplicacao_id=${APLICACAO_ID}&rota=%2F&lang_tag=pt-BR"
           echo "GET $URL" | tee -a deploy.log
-          # ⬇⬇ salva DENTRO de _src para facilitar o caminho relativo no próximo passo
+          # salva DENTRO de _src para caminho consistente no próximo passo
           curl -fLsS -L "$URL" \
             -H "Accept: application/json" \
             -o _src/_meta.json || echo "[]" > _src/_meta.json
@@ -216,10 +216,12 @@ jobs:
           echo | tee -a deploy.log
 
       - name: Injetar metadados no index.html (se houver)
+        env:
+          STATE: ${{ steps.derive.outputs.state }}
         working-directory: _src/build/web
         run: |
           set -euo pipefail
-          # Agora o arquivo está em ../../_meta.json (=_src/_meta.json)
+          # Arquivo meta está em ../../_meta.json (=_src/_meta.json)
           test -s ../../_meta.json || exit 0
           if ! jq -e 'length>0' ../../_meta.json >/dev/null 2>&1; then exit 0; fi
 
@@ -238,26 +240,40 @@ jobs:
           PRODUCT_JSON="$(jq -c 'try .product // {}' ../../_meta_one.json)"
           LOCALBIZ_JSON="$(jq -c 'try .localbusiness // {}' ../../_meta_one.json)"
 
+          # Remove duplicatas: description/og/twitter/canonical e também QUALQUER <title> antigo
           sed -i '/<meta name="description"/Id' index.html
           sed -i '/<link rel="canonical"/Id' index.html
           sed -i '/<meta property="og:/Id' index.html
           sed -i '/<meta name="twitter:/Id' index.html
+          sed -i '/<title>.*<\/title>/Id' index.html
+
+          # Caso dev/beta: noindex
+          ROBOTS=""
+          if [[ "${STATE:-}" == "dev" || "${STATE:-}" == "beta" ]]; then
+            ROBOTS='<meta name="robots" content="noindex,nofollow">'
+          fi
 
           {
             echo '<!-- injected SEO start -->'
             [[ -n "$TITLE" ]] && echo "<title>${TITLE}</title>"
             [[ -n "$DESC"  ]] && echo "<meta name=\"description\" content=\"${DESC}\">"
             [[ -n "$CANON" ]] && echo "<link rel=\"canonical\" href=\"${CANON}\">"
+            [[ -n "$ROBOTS" ]] && echo "$ROBOTS"
+
+            # Open Graph
             [[ -n "$OG_TITLE" ]] && echo "<meta property=\"og:title\" content=\"${OG_TITLE}\">"
             [[ -n "$OG_DESC"  ]] && echo "<meta property=\"og:description\" content=\"${OG_DESC}\">"
             [[ -n "$OG_IMG"   ]] && echo "<meta property=\"og:image\" content=\"${OG_IMG}\">"
             [[ -n "$OG_TYPE"  ]] && echo "<meta property=\"og:type\" content=\"${OG_TYPE}\">"
             [[ -n "$SITE_NAME" ]] && echo "<meta property=\"og:site_name\" content=\"${SITE_NAME}\">"
+
+            # Twitter
             [[ -n "$OG_TITLE" ]] && echo "<meta name=\"twitter:title\" content=\"${OG_TITLE}\">"
             [[ -n "$OG_DESC"  ]] && echo "<meta name=\"twitter:description\" content=\"${OG_DESC}\">"
             [[ -n "$OG_IMG"   ]] && echo "<meta name=\"twitter:image\" content=\"${OG_IMG}\">"
             echo "<meta name=\"twitter:card\" content=\"summary_large_image\">"
 
+            # JSON-LD opcionais
             if jq -e 'with_entries(select(.value != null)) | length>0' <<<"$ARTICLE_JSON" >/dev/null; then
               jq -n --argjson a "$ARTICLE_JSON" \
                  '{ "@context":"https://schema.org", "@type": ($a.type // "Article"),
@@ -292,7 +308,24 @@ jobs:
             echo '<!-- injected SEO end -->'
           } > __inject.html
 
-          awk 'BEGIN{done=0} {print; if(!done && tolower($0) ~ /<head[^>]*>/){system("cat __inject.html"); done=1}}' index.html > __index.html
+          # Injeta preferencialmente após o <meta charset>; se não achar, após <head>
+          awk '
+            BEGIN{done=0}
+            {
+              print
+              if(!done && tolower($0) ~ /<meta[^>]+charset=/){
+                system("cat __inject.html"); done=1
+              }
+            }
+            END{
+              if(!done){
+                # fallback: injeta depois de <head>
+                # (fazemos uma segunda passada rápida em shell)
+                # substitui a primeira ocorrência de <head> por <head>\n[bloco]
+                system("awk \\''BEGIN{ins=0} {print; if(!ins && tolower($0) ~ /<head[^>]*>/){system(\"cat __inject.html\"); ins=1}}\\'' index.html > __index2.html && mv __index2.html index.html")
+              }
+            }
+          ' index.html > __index.html
           mv __index.html index.html
           rm -f __inject.html
 
