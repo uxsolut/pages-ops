@@ -269,17 +269,18 @@ jobs:
             [[ -n "$OG_IMG"   ]] && echo "<meta name=\"twitter:image\" content=\"${OG_IMG}\">"
             echo "<meta name=\"twitter:card\" content=\"summary_large_image\">"
 
-            # JSON-LD: Article
+            # JSON-LD: Article (agora usa image_urls e remove nulos/arrays vazios)
             if jq -e 'with_entries(select(.value != null)) | length>0' <<<"$ARTICLE_JSON" >/dev/null; then
               jq -n --argjson a "$ARTICLE_JSON" \
                  '{ "@context":"https://schema.org", "@type": ($a.type // "Article"),
                     "headline":$a.headline, "description":$a.description, "author":($a.author_name // null),
                     "datePublished":$a.date_published, "dateModified":$a.date_modified,
-                    "image":($a.cover_image_url // null) }' \
+                    "image":($a.image_urls // null) } 
+                  | with_entries(select(.value != null and (.value|type!="array" or (.value|length>0))))' \
               | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/'
             fi
 
-            # JSON-LD: Product
+            # JSON-LD: Product (inalterado)
             if jq -e 'with_entries(select(.value != null)) | length>0' <<<"$PRODUCT_JSON" >/dev/null; then
               jq -n --argjson p "$PRODUCT_JSON" \
                  '{ "@context":"https://schema.org", "@type":"Product",
@@ -291,7 +292,7 @@ jobs:
               | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/'
             fi
 
-            # JSON-LD: LocalBusiness
+            # JSON-LD: LocalBusiness (agora inclui logo e remove nulos/arrays vazios)
             if jq -e 'with_entries(select(.value != null)) | length>0' <<<"$LOCALBIZ_JSON" >/dev/null; then
               jq -n --argjson b "$LOCALBIZ_JSON" \
                  '{ "@context":"https://schema.org", "@type":"LocalBusiness",
@@ -299,7 +300,8 @@ jobs:
                     "address":{"@type":"PostalAddress","streetAddress":$b.street,"addressLocality":$b.city,
                                "addressRegion":$b.region,"postalCode":$b.zip},
                     "geo":{"@type":"GeoCoordinates","latitude":$b.latitude,"longitude":$b.longitude},
-                    "openingHours":$b.opening_hours, "image":$b.image_urls }' \
+                    "openingHours":$b.opening_hours, "image":$b.image_urls, "logo":$b.logo_url } 
+                  | with_entries(select(.value != null and (.value|type!="array" or (.value|length>0))))' \
               | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/'
             fi
 
