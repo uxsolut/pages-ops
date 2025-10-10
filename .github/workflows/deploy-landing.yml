@@ -269,7 +269,7 @@ jobs:
             [[ -n "$OG_IMG"   ]] && echo "<meta name=\"twitter:image\" content=\"${OG_IMG}\">"
             echo "<meta name=\"twitter:card\" content=\"summary_large_image\">"
 
-            # JSON-LD: Article (usa image_urls se houver)
+            # JSON-LD: Article (sem datas; remove nulls)
             if jq -e 'with_entries(select(.value != null)) | length>0' <<<"$ARTICLE_JSON" >/dev/null; then
               jq -n --argjson a "$ARTICLE_JSON" '
                 {
@@ -277,28 +277,41 @@ jobs:
                   "@type": ($a.type // "Article"),
                   "headline": $a.headline,
                   "description": $a.description,
-                  "author": ($a.author_name // null),
-                  "datePublished": $a.date_published,
-                  "dateModified": $a.date_modified
+                  "author": ($a.author_name // null)
                 }
                 + (if ($a.image_urls|type=="array" and ($a.image_urls|length>0))
                    then {"image": $a.image_urls} else {} end)
-              ' | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/'
-            fi
-
-            # JSON-LD: Product (inalterado)
-            if jq -e 'with_entries(select(.value != null)) | length>0' <<<"$PRODUCT_JSON" >/dev/null; then
-              jq -n --argjson p "$PRODUCT_JSON" \
-                 '{ "@context":"https://schema.org", "@type":"Product",
-                    "name":$p.name, "description":$p.description, "sku":$p.sku, "brand":$p.brand,
-                    "image":$p.image_urls,
-                    "offers":{"@type":"Offer","priceCurrency":$p.price_currency, "price":($p.price|tostring?),
-                              "availability":$p.availability,"itemCondition":$p.item_condition,
-                              "priceValidUntil":$p.price_valid_until} }' \
+              ' \
+              | jq 'with_entries(select(.value != null))' \
               | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/'
             fi
 
-            # JSON-LD: LocalBusiness (adiciona logo se existir)
+            # JSON-LD: Product (limpa nulls em nível raiz e em offers)
+            if jq -e 'with_entries(select(.value != null)) | length>0' <<<"$PRODUCT_JSON" >/dev/null; then
+              jq -n --argjson p "$PRODUCT_JSON" '
+                {
+                  "@context":"https://schema.org",
+                  "@type":"Product",
+                  "name":$p.name,
+                  "description":$p.description,
+                  "sku":$p.sku,
+                  "brand":$p.brand,
+                  "image":$p.image_urls,
+                  "offers":{
+                    "@type":"Offer",
+                    "priceCurrency":$p.price_currency,
+                    "price":($p.price|tostring?),
+                    "availability":$p.availability,
+                    "itemCondition":$p.item_condition,
+                    "priceValidUntil":$p.price_valid_until
+                  }
+                }
+              ' \
+              | jq 'with_entries(select(.value != null)) | .offers |= (with_entries(select(.value != null)))' \
+              | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/'
+            fi
+
+            # JSON-LD: LocalBusiness (limpa nulls; adiciona logo se houver)
             if jq -e 'with_entries(select(.value != null)) | length>0' <<<"$LOCALBIZ_JSON" >/dev/null; then
               jq -n --argjson b "$LOCALBIZ_JSON" '
                 {
@@ -325,7 +338,9 @@ jobs:
                    then {"image": $b.image_urls} else {} end)
                 + (if ($b.logo_url != null and $b.logo_url != "")
                    then {"logo": $b.logo_url} else {} end)
-              ' | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/'
+              ' \
+              | jq 'with_entries(select(.value != null)) | .address |= (with_entries(select(.value != null))) | .geo |= (with_entries(select(.value != null)))' \
+              | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/'
             fi
 
             echo '<!-- injected SEO end -->'
