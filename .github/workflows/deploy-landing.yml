@@ -269,15 +269,21 @@ jobs:
             [[ -n "$OG_IMG"   ]] && echo "<meta name=\"twitter:image\" content=\"${OG_IMG}\">"
             echo "<meta name=\"twitter:card\" content=\"summary_large_image\">"
 
-            # JSON-LD: Article (agora usa image_urls e remove nulos/arrays vazios)
+            # JSON-LD: Article (usa image_urls se houver)
             if jq -e 'with_entries(select(.value != null)) | length>0' <<<"$ARTICLE_JSON" >/dev/null; then
-              jq -n --argjson a "$ARTICLE_JSON" \
-                 '{ "@context":"https://schema.org", "@type": ($a.type // "Article"),
-                    "headline":$a.headline, "description":$a.description, "author":($a.author_name // null),
-                    "datePublished":$a.date_published, "dateModified":$a.date_modified,
-                    "image":($a.image_urls // null) } 
-                  | with_entries(select(.value != null and (.value|type!="array" or (.value|length>0))))' \
-              | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/'
+              jq -n --argjson a "$ARTICLE_JSON" '
+                {
+                  "@context":"https://schema.org",
+                  "@type": ($a.type // "Article"),
+                  "headline": $a.headline,
+                  "description": $a.description,
+                  "author": ($a.author_name // null),
+                  "datePublished": $a.date_published,
+                  "dateModified": $a.date_modified
+                }
+                + (if ($a.image_urls|type=="array" and ($a.image_urls|length>0))
+                   then {"image": $a.image_urls} else {} end)
+              ' | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/'
             fi
 
             # JSON-LD: Product (inalterado)
@@ -292,17 +298,34 @@ jobs:
               | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/'
             fi
 
-            # JSON-LD: LocalBusiness (agora inclui logo e remove nulos/arrays vazios)
+            # JSON-LD: LocalBusiness (adiciona logo se existir)
             if jq -e 'with_entries(select(.value != null)) | length>0' <<<"$LOCALBIZ_JSON" >/dev/null; then
-              jq -n --argjson b "$LOCALBIZ_JSON" \
-                 '{ "@context":"https://schema.org", "@type":"LocalBusiness",
-                    "name":$b.business_name, "telephone":$b.phone, "priceRange":$b.price_range,
-                    "address":{"@type":"PostalAddress","streetAddress":$b.street,"addressLocality":$b.city,
-                               "addressRegion":$b.region,"postalCode":$b.zip},
-                    "geo":{"@type":"GeoCoordinates","latitude":$b.latitude,"longitude":$b.longitude},
-                    "openingHours":$b.opening_hours, "image":$b.image_urls, "logo":$b.logo_url } 
-                  | with_entries(select(.value != null and (.value|type!="array" or (.value|length>0))))' \
-              | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/'
+              jq -n --argjson b "$LOCALBIZ_JSON" '
+                {
+                  "@context":"https://schema.org",
+                  "@type":"LocalBusiness",
+                  "name": $b.business_name,
+                  "telephone": $b.phone,
+                  "priceRange": $b.price_range,
+                  "address":{
+                    "@type":"PostalAddress",
+                    "streetAddress": $b.street,
+                    "addressLocality": $b.city,
+                    "addressRegion": $b.region,
+                    "postalCode": $b.zip
+                  },
+                  "geo":{
+                    "@type":"GeoCoordinates",
+                    "latitude": $b.latitude,
+                    "longitude": $b.longitude
+                  },
+                  "openingHours": $b.opening_hours
+                }
+                + (if ($b.image_urls|type=="array" and ($b.image_urls|length>0))
+                   then {"image": $b.image_urls} else {} end)
+                + (if ($b.logo_url != null and $b.logo_url != "")
+                   then {"logo": $b.logo_url} else {} end)
+              ' | sed '1s/^/<script type="application\/ld+json">/; $s/$/<\/script>/'
             fi
 
             echo '<!-- injected SEO end -->'
@@ -417,4 +440,11 @@ jobs:
           [[ -n "${API_TOKEN:-}" ]] && AUTH=(-H "Authorization: Bearer ${API_TOKEN}")
           echo "PUT ${API_BASE}/status-aplicacao/${APLICACAO_ID} -> falhou" | tee -a deploy.log
           JSON_PAYLOAD="{\"status\":\"falhou\",\"resumo_do_erro\":${ERR_SUMMARY_JSON}}"
-          echo "${JSON_PAY
+          echo "${JSON_PAYLOAD}" \
+            | curl --fail-with-body -sS -X PUT \
+                -H "Content-Type: application/json; charset=utf-8" \
+                "${AUTH[@]}" \
+                "${API_BASE}/status-aplicacao/${APLICACAO_ID}" \
+                --data-binary @- \
+            | tee -a deploy.log
+          echo >> deploy.log
